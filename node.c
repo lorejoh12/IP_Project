@@ -13,9 +13,9 @@
 #define MAX_BACK_LOG (5)
 #define MAX_READIN_BUFFER (64 * 1024)
 
-
 #define MAX_DISTANCE 16
 
+#define LOCALHOST_IP "127.0.0.1"
 
 /* table of table entries */
 /* table of link interfaces along with their status (up or down) */
@@ -27,9 +27,10 @@ typedef struct link_entry
   //int connection; // what is this?
   int distance;
   int interface_id;
-  uint16_t port;
-  char interface_vip[20];
-  char my_vip[20];
+  uint16_t port; // the actual port to send to
+  char interface_ip[20]; // the actual IP address of the connection
+  char interface_vip[20]; // the given "virtual" IP address of the connection
+  char my_vip[20]; // the "virtual" IP address that they have for this node
   char * status; // up or down
   //lastupdated timestamp // not sure if necessary since we'll be doing simultaneous updates?
 } entry_t; 
@@ -59,6 +60,19 @@ printTable(entry_t * table){
     if(e.interface_id == 0) break;
     printf("%d %s %s\n", e.interface_id, e.interface_vip, e.status);
   }
+}
+
+// gets the table entry in the router from the VIP provided
+entry_t extractNextHopFromVIP(char * interface_vip, entry_t * table){
+  entry_t NullStruct = { MAX_DISTANCE, -1, -1, "", "", "" };
+  if(interface_vip == NULL) return NullStruct;
+  int i;
+  for(i = 0; ; i +=1){
+    entry_t e = table[i];
+    if(strcmp(interface_vip, e.interface_vip)==0) return e;
+    if(e.interface_id <= 0) break;
+  }
+  return NullStruct;
 }
 /* example code   
 bool builtin_cmd(job_t *last_job, int argc, char **argv) {
@@ -375,6 +389,7 @@ int main(int argc, char ** argv)
     fprintf(stdout, "next: %s\n", nextDescrip);
     
     nextIP = strtok (nextDescrip,":");
+    if(strcmp(nextIP, "localhost")==0) strcpy(nextIP, LOCALHOST_IP);
     nextPort = atoi(strtok (NULL,": "));
 
     printf("nextIP: %s, nextPort: %d\n  myVIP: %s, remoteVIP: %s\n", nextIP, (int) nextPort, myVIP, remoteVIP);
@@ -382,12 +397,14 @@ int main(int argc, char ** argv)
     link_entry_table[id-1].distance = MAX_DISTANCE;
     link_entry_table[id-1].interface_id = id;
     link_entry_table[id-1].port = nextPort;
+    strcpy(link_entry_table[id-1].interface_ip, nextIP);
     strcpy(link_entry_table[id-1].interface_vip, remoteVIP);
     strcpy(link_entry_table[id-1].my_vip, myVIP);
     link_entry_table[id-1].status = "up";
   }
 
   printTable(link_entry_table);
+  printf("\n");
 
 
   // Set up send socket
@@ -419,19 +436,24 @@ int main(int argc, char ** argv)
       else if(strcmp("send", cmd)==0){
         scanf("%s %[^\n]s", sendAddress, message);
 
-        // TODO grab these from the table using the VIP provided in sendAddress
-        sendPort = 17001;
-        strcpy(sendAddress, "127.0.0.1");
-
-        send_addr.sin_addr.s_addr = inet_addr(sendAddress);
-        send_addr.sin_family = AF_INET;
-        send_addr.sin_port = htons(sendPort);
-
-        if (sendto(send_socket,message,sizeof(message),0, (struct sockaddr*) &send_addr,sizeof(send_addr))==-1) {
-          perror("failed to send message");
+        entry_t e = extractNextHopFromVIP(sendAddress, link_entry_table);
+        if(e.interface_id <=0){
+          printf("Failed to send, recipient not in table");
         }
+        else {
+          sendPort = e.port;
+          strcpy(sendAddress, e.interface_ip);
 
-        printf("send to: %s, port %d, message: %s\n", sendAddress, sendPort, message);
+          send_addr.sin_addr.s_addr = inet_addr(sendAddress);
+          send_addr.sin_family = AF_INET;
+          send_addr.sin_port = htons(sendPort);
+
+          if (sendto(send_socket,message,sizeof(message),0, (struct sockaddr*) &send_addr,sizeof(send_addr))==-1) {
+            perror("failed to send message");
+          }
+
+          printf("send to: %s, port %d, message: %s\n", sendAddress, sendPort, message);
+        }
       }
       else{
         printf("not a valid command: %s\n", cmd);
