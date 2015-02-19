@@ -7,24 +7,34 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <stdlib.h>
-
+#include <fcntl.h>
 
 #define MAX_MSG_LENGTH (1400)
 #define MAX_BACK_LOG (5)
 #define MAX_READIN_BUFFER (64 * 1024)
 
+
+#define MAX_DISTANCE 16
+
+
 /* table of table entries */
 /* table of link interfaces along with their status (up or down) */
 /* uint16_t myPort */
 /* socket mySocket */
-/*struct table entry
+typedef struct link_entry
+{
+  //sourceofentry // what is this?
+  //int connection; // what is this?
+  int distance;
+  int interface_id;
+  uint16_t port;
+  char interface_vip[20];
+  char my_vip[20];
+  char * status; // up or down
+  //lastupdated timestamp // not sure if necessary since we'll be doing simultaneous updates?
+} entry_t; 
 
-sourceofentry
-connection
-distance
-port
-lastupdated timestamp
-*/
+entry_t link_entry_table[100]; // I'm tired of trying to do this correctly
 
 /* RIP HEADER
 
@@ -40,22 +50,16 @@ uint32_t address;
 IP packet header in ip.h
 */
 
-int main(int argc, char ** argv)
-{
-    /* argv[1] is file name
-    /* open up using file descriptor
-    /* read first line of file and set as myPort, call listenOn(myPort) */
-    /* while other lines in file, read and set up link file/create interfaces implemented by UDP socket (call method setUpPort(port) */
-    
-    /* send request message (RIP command: 1) to all links in link table
-    
-    /* wait for user commands */
-    /* wait for 5 second timeouts
-        on 5 second timeout call sendUpdate to every active ('up') link in table
-        */
-   
-    /* if (ifconfig)  etc.*/
-}    
+
+printTable(entry_t * table){
+  int i;
+  printf("printing table:\n");
+  for(i = 0; ; i += 1){
+    entry_t e = table[i];
+    if(e.interface_id == 0) break;
+    printf("%d %s %s\n", e.interface_id, e.interface_vip, e.status);
+  }
+}
 /* example code   
 bool builtin_cmd(job_t *last_job, int argc, char **argv) {
    if (!strcmp(argv[0], "quit")) {
@@ -143,26 +147,28 @@ checks if entries are expired (older than 12 seconds)
     return appropriate entry/value/port
 */
 
-/* receivePacket() 
-    call upon receiving a packet
-    
-    if(dest != myPort) {
-        calculate IP checksum
-        decrement TTL
-        do any other necessary header changes and such
-        referenceTable() - get necessary information
-        send(header, packet)
-    }
-    else {
-        if IP protocol field = 200
-            if command = 1
-                sendUpdate(request source)
-            else if command =2
-                read and updateTable(entry)
-        else
-            print packet contents
-    }
-*/
+receivePacket(char * message)
+{
+  /*call upon receiving a packet
+  
+  if(dest != myPort) {
+      calculate IP checksum
+      decrement TTL
+      do any other necessary header changes and such
+      referenceTable() - get necessary information
+      send(header, packet)
+  }
+  else {
+      if IP protocol field = 200
+          if command = 1
+              sendUpdate(request source)
+          else if command =2
+              read and updateTable(entry)
+      else
+          print packet contents
+          */
+  }
+
 
 /* updateTable ()
     replaces or adds entry if better distance
@@ -220,80 +226,222 @@ int client(const char * addr, uint16_t port)
 }
 */
 
-/*
-int listenOn(uint16_t port) {
-    setUpPort(port)
-    listen for packets and call receivePacket(packet) on receive)
-}
-*/
-
-
-
-/* Edit this method to just set up a socket port and return the int
-int setUpPort(uint16_t port)
+int setUpPort(uint16_t port, struct sockaddr_in server_addr)
 {
-    int len;
-    int sock, in_sock;
-	struct sockaddr_in server_addr;
-    char msg[MAX_MSG_LENGTH], reply[MAX_REPLY_LENGTH];
-    char addr[len];
+  int sock, in_sock;
         
-	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-		perror("Create socket error:");
-		return 1;
-	}
+  if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { // SOCK_DGRAM for UDP
+    perror("Create socket error:");
+    return -1;
+  }
 
-	printf("Socket created\n");
-	
-    bzero((char *)&server_addr, sizeof(server_addr));
-    server_addr.sin_addr.s_addr = INADDR_ANY; 
-	server_addr.sin_family = AF_INET;
-	server_addr.sin_port = htons(port);
+  printf("Socket created\n");
 
-    if ((bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr))) < 0) {
-       perror("Bind error:");
-       return 1;
+  if ((bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr))) < 0) {
+     perror("Bind error:");
+     return -1;
+  }
+  
+  printf("bind done\n");
+  
+  listen(sock, MAX_BACK_LOG);
+  printf("listen done, waiting for connection\n");
+  
+  return sock;
+}
+
+int listenOn(uint16_t port) {
+  // start up new thread to listen for incoming messages
+  int sock, in_sock;
+  int len;
+  struct sockaddr_in server_addr;
+  char msg[MAX_MSG_LENGTH];
+  char addr[len];
+
+  bzero((char *)&server_addr, sizeof(server_addr));
+  server_addr.sin_addr.s_addr = INADDR_ANY; // set to myIP?
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(port);
+
+  if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { // SOCK_DGRAM for UDP
+    perror("Create socket error:");
+    return -1;
+  }
+
+  printf("Socket created\n");
+
+  if ((bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr))) < 0) {
+     perror("Bind error:");
+     return -1;
+  }
+  
+  printf("bind done\n");
+
+  return sock;
+  /*
+  while(1) {
+    
+      inet_ntop(AF_INET, &(server_addr.sin_addr), addr, len);
+      memset(msg, 0, MAX_MSG_LENGTH);
+      
+      msg[MAX_MSG_LENGTH] = '\0';
+      
+      while (len = recv(sock, msg, MAX_MSG_LENGTH, 0)) {
+        receivePacket(msg);
+        printf("recv from client: %s\n", msg);
+        sprintf(reply, "%s%s%s", msg, msg, msg);
+        send(in_sock, reply, strnlen(reply, MAX_REPLY_LENGTH), 0);
+        
+        memset(msg, 0, MAX_MSG_LENGTH);
+
+        int nonBlocking = 1; 
+        if ( fcntl( handle,  F_SETFL,  O_NONBLOCK,  nonBlocking ) == -1 ) { 
+          printf( "failed to set non-blocking\n" ); 
+          return false; 
+        }
+
+      }
+      
+      close(in_sock);
+      printf("client disconnected\n");
+      exit(0);
     }
     
-    printf("bind done\n");
     
-    listen(sock, MAX_BACK_LOG);
-    printf("listen done, waiting for connection\n");
+    close(in_sock); */
+}
+
+int main(int argc, char ** argv)
+{
+    /* argv[1] is file name
+    /* open up using file descriptor
+    /* read first line of file and set as myPort, call listenOn(myPort) */
+    /* while other lines in file, read and set up link file/create interfaces implemented by UDP socket (call method setUpPort(port) */
     
-    while(1) {
-        if((in_sock = accept(sock, (struct sockaddr *)&server_addr, &len)) < 0) {
-            perror("Accept error:");
-            return 1;
+    /* send request message (RIP command: 1) to all links in link table
+    
+    /* wait for user commands */
+    /* wait for 5 second timeouts
+        on 5 second timeout call sendUpdate to every active ('up') link in table
+        */
+   
+    /* if (ifconfig)  etc.*/
+
+  FILE *ifp;
+  int rec_socket, send_socket, len;
+  char msg[MAX_MSG_LENGTH];
+  fd_set active_fd_set, read_fd_set;
+
+  FD_ZERO (&active_fd_set);
+  FD_SET (0, &active_fd_set);
+
+  // test
+  printf("file name: %s\n", argv[1]);
+
+  if ((ifp = fopen(argv[1], "rt")) == NULL) {
+    printf("Can't open input file\n");
+    exit(1);
+  }
+
+  char myDescrip[80], nextDescrip[80], myVIP[80], remoteVIP[80];
+  char * myIP, * nextIP;
+  uint16_t myPort, nextPort;
+  int id;
+
+  // reads in addr:port and splits
+  fscanf(ifp, "%s", myDescrip);
+  printf("%s\n", myDescrip);
+  myIP = strtok (myDescrip,":");
+  myPort = atoi(strtok (NULL,": "));
+
+  // creates the rec_socket, sets it to be non-blocking UDP
+  rec_socket = listenOn(myPort);
+  FD_SET (rec_socket, &active_fd_set);
+
+  int nonBlocking = 1; 
+  if ( fcntl( rec_socket,  F_SETFL,  O_NONBLOCK,  nonBlocking ) == -1 ) { 
+    printf( "failed to set non-blocking\n" ); 
+    return -1; 
+  }
+
+  printf("receive socket: %d, set to non-blocking UDP\n\n", rec_socket);
+
+  printf("myIP: %s\nmyPort: %d\n", myIP, (int) myPort);
+  id = 0; // because oddly the assignment specifies the first element as id 1, not id 0
+  while(!feof(ifp)){
+    id++;
+
+    fscanf(ifp, "%s %s %s", nextDescrip, myVIP, remoteVIP);
+    fprintf(stdout, "next: %s\n", nextDescrip);
+    
+    nextIP = strtok (nextDescrip,":");
+    nextPort = atoi(strtok (NULL,": "));
+
+    printf("nextIP: %s, nextPort: %d\n  myVIP: %s, remoteVIP: %s\n", nextIP, (int) nextPort, myVIP, remoteVIP);
+
+    link_entry_table[id-1].distance = MAX_DISTANCE;
+    link_entry_table[id-1].interface_id = id;
+    link_entry_table[id-1].port = nextPort;
+    strcpy(link_entry_table[id-1].interface_vip, remoteVIP);
+    strcpy(link_entry_table[id-1].my_vip, myVIP);
+    link_entry_table[id-1].status = "up";
+  }
+
+  printTable(link_entry_table);
+
+
+  // Set up send socket
+  if ((send_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1){ // not sure what IPPROTO_UDP is
+    perror("send socket error");
+    exit(EXIT_FAILURE);
+  }
+
+  char c;
+  char cmd[40], sendAddress[40], message[MAX_MSG_LENGTH];
+  struct sockaddr_in send_addr;
+  int sendPort;
+
+  while(1){
+    printf("waiting for input from the user or socket...\n");
+
+    read_fd_set = active_fd_set;
+    if (select (FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0){ // 3rd NULL, no timeout in this example
+      perror ("select error");
+      exit (EXIT_FAILURE);
+    }
+
+    // select says there's data, go through all open file descriptors and update
+    if (FD_ISSET (0, &read_fd_set)){
+      scanf("%s", cmd);
+      if(strcmp("ifconfig", cmd)==0){
+        printTable(link_entry_table);
+      }
+      else if(strcmp("send", cmd)==0){
+        scanf("%s %[^\n]s", sendAddress, message);
+
+        // TODO grab these from the table using the VIP provided in sendAddress
+        sendPort = 17001;
+        strcpy(sendAddress, "127.0.0.1");
+
+        send_addr.sin_addr.s_addr = inet_addr(sendAddress);
+        send_addr.sin_family = AF_INET;
+        send_addr.sin_port = htons(sendPort);
+
+        if (sendto(send_socket,message,sizeof(message),0, (struct sockaddr*) &send_addr,sizeof(send_addr))==-1) {
+          perror("failed to send message");
         }
-        
-        if ((fork()) == 0) {
-            close(sock);
-            inet_ntop(AF_INET, &(server_addr.sin_addr), addr, len);
-    
-            printf("accept connection from %s\n", addr);
-            memset(msg, 0, MAX_MSG_LENGTH);
-            memset(reply, 0, MAX_REPLY_LENGTH);
-            
-            msg[MAX_MSG_LENGTH] = '\0';
-            reply[MAX_REPLY_LENGTH] = '\0';
-            
-            while (len = recv(in_sock, msg, MAX_MSG_LENGTH, 0)) {
-                printf("recv from client: %s\n", msg);
-                sprintf(reply, "%s%s%s", msg, msg, msg);
-                
-                send(in_sock, reply, strnlen(reply, MAX_REPLY_LENGTH), 0);
-                memset(msg, 0, MAX_MSG_LENGTH);
-                memset(reply, 0, MAX_REPLY_LENGTH);
-            }
-            
-            close(in_sock);
-            printf("client disconnected\n");
-            exit(0);
-        }
-        
-        
-        close(in_sock);
-    }   
- 
-	return 0;
-} */
+
+        printf("send to: %s, port %d, message: %s\n", sendAddress, sendPort, message);
+      }
+      else{
+        printf("not a valid command: %s\n", cmd);
+      }
+      while ((c = getchar()) != '\n' && c != EOF); // clears the stdin buffer if there's anything left
+    }
+    if (FD_ISSET (rec_socket, &read_fd_set)){
+      printf("got data\n");
+      recv(rec_socket, message, MAX_READIN_BUFFER, 0);
+      printf("%s\n", message);
+    }
+  }
+}
