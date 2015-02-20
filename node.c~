@@ -17,9 +17,6 @@
 
 #define LOCALHOST_IP "127.0.0.1"
 
-#define RIP_PROTOCOL 200
-#define TEST_PROTOCOL 0
-
 /* table of table entries */
 /* table of link interfaces along with their status (up or down) */
 /* uint16_t myPort */
@@ -76,17 +73,6 @@ entry_t extractNextHopFromVIP(char * interface_vip, entry_t * table){
     if(e.interface_id <= 0) break;
   }
   return NullStruct;
-}
-
-int isMe(char * vip, entry_t * table){
-  if(vip == NULL) return -1;
-  int i;
-  for(i = 0; ; i +=1){
-    entry_t e = table[i];
-    if(strcmp(vip, e.my_vip)==0) return 1;
-    if(e.interface_id <= 0) break;
-  }
-  return -1;
 }
 /* example code   
 bool builtin_cmd(job_t *last_job, int argc, char **argv) {
@@ -458,30 +444,11 @@ int main(int argc, char ** argv)
           sendPort = e.port;
           strcpy(sendAddress, e.interface_ip);
 
-          // create IP header
-          struct iphdr *ip;
-          char *mes;
-
-          char packet[MAX_MSG_LENGTH];
-          ip = (struct iphdr*) packet;
-
-          mes = (char *)(packet + sizeof(struct iphdr));
-          strcpy(mes, message);
-
-          ip->version     = 4;
-          ip->tot_len     = sizeof(struct iphdr) + strlen(mes);
-          ip->protocol    = TEST_PROTOCOL;
-          ip->ttl         = MAX_DISTANCE;
-          ip->saddr       = inet_addr(e.my_vip);
-          ip->daddr       = inet_addr(e.interface_vip);
-          // TODO calculate checksum
-          ip->check       = 5;//in_cksum((unsigned short *)ip, sizeof(struct iphdr)); 
-
           send_addr.sin_addr.s_addr = inet_addr(sendAddress);
           send_addr.sin_family = AF_INET;
           send_addr.sin_port = htons(sendPort);
 
-          if (sendto(send_socket,packet, ip->tot_len,0, (struct sockaddr*) &send_addr, sizeof(send_addr))==-1) {
+          if (sendto(send_socket,message,sizeof(message),0, (struct sockaddr*) &send_addr,sizeof(send_addr))==-1) {
             perror("failed to send message");
           }
 
@@ -495,37 +462,8 @@ int main(int argc, char ** argv)
     }
     if (FD_ISSET (rec_socket, &read_fd_set)){
       printf("got data\n");
-
-      char recv_packet[MAX_READIN_BUFFER];
-      char * payload;
-      char dest_addr[20];
-      struct iphdr * recv_ip;
-      struct sockaddr_in sa;
-      entry_t nextHop;
-
-      recv(rec_socket, recv_packet, MAX_READIN_BUFFER, 0);
-
-      recv_ip = (struct iphdr*) recv_packet;
-      payload = (char *)(recv_packet + sizeof(struct iphdr));
-
-      // check protocol to see if this is RIP or test send message
-
-      inet_ntop(AF_INET, &(recv_ip->daddr), dest_addr, INET_ADDRSTRLEN);
-
-      if(isMe(dest_addr, link_entry_table)<0){ // not in the table, need to forward
-        nextHop = extractNextHopFromVIP(dest_addr, link_entry_table);
-        // decrement ttl, recalculate checksum
-        send_addr.sin_addr.s_addr = inet_addr(nextHop.interface_ip);
-        send_addr.sin_family = AF_INET;
-        send_addr.sin_port = htons(nextHop.port);
-
-        if (sendto(send_socket,recv_packet, recv_ip->tot_len,0, (struct sockaddr*) &send_addr, sizeof(send_addr))==-1) {
-          perror("failed to send message");
-        }
-      }
-      else{
-        printf("message: %s\n", payload);
-      }
+      recv(rec_socket, message, MAX_READIN_BUFFER, 0);
+      printf("%s\n", message);
     }
   }
 }
