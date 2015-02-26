@@ -407,6 +407,68 @@ int populate_entry_table(FILE * ifp, entry_t * table){
   }
 }
 
+int handle_commands(char * cmd, int send_socket){
+  char sendAddress[40], message[MAX_MSG_LENGTH], c;
+  entry_t extracted_entry;
+
+  if(strcmp("ifconfig", cmd)==0){
+    printTable(link_entry_table);
+  }
+  else if(strcmp("send", cmd)==0){
+    scanf("%s %[^\n]s", sendAddress, message);
+    send_packet(sendAddress, message, send_socket, MAX_DISTANCE, TEST_PROTOCOL, &extracted_entry);
+    printf("sent to: %s, port %d, message: %s\n", extracted_entry.interface_vip, extracted_entry.port, message);
+  }
+  else{
+    printf("not a valid command: %s\n", cmd);
+  }
+  while ((c = getchar()) != '\n' && c != EOF); // clears the stdin buffer if there's anything left
+}
+
+int initialize_from_file(char * file_name){
+  FILE *ifp;
+
+  printf("file name: %s\n", file_name);
+
+  if ((ifp = fopen(file_name, "rt")) == NULL) {
+    printf("Can't open input file\n");
+    exit(1);
+  }
+
+  char myDescrip[80];
+  char * myIP;
+  uint16_t myPort;
+
+  // reads in addr:port and splits
+  fscanf(ifp, "%s", myDescrip);
+  printf("%s\n", myDescrip);
+  myIP = strtok (myDescrip,":");
+  myPort = atoi(strtok (NULL,": "));
+
+  printf("myIP: %s\nmyPort: %d\n", myIP, (int) myPort);
+  
+  populate_entry_table(ifp, link_entry_table);
+
+  return myPort;
+
+}
+
+int initialize_recieve_socket(int myPort, fd_set * active_fd_set){
+  int rec_socket;
+
+  rec_socket = listenOn(myPort);
+  FD_SET (rec_socket, active_fd_set);
+
+  if ( fcntl( rec_socket,  F_SETFL,  O_NONBLOCK, 1) == -1 ) { 
+    printf( "failed to set non-blocking\n" ); 
+    return -1; 
+  }
+
+  printf("receive socket: %d, set to non-blocking UDP\n\n", rec_socket);
+
+  return rec_socket;
+}
+
 int main(int argc, char ** argv)
 {
     /* argv[1] is file name
@@ -423,52 +485,22 @@ int main(int argc, char ** argv)
    
     /* if (ifconfig)  etc.*/
 
-  FILE *ifp;
-  int rec_socket, send_socket, len;
-  char msg[MAX_MSG_LENGTH];
+  int rec_socket, send_socket, myPort;
   fd_set active_fd_set, read_fd_set;
+  fd_set * active_set_ptr;
+
+  active_set_ptr = & active_fd_set;
 
   FD_ZERO (&active_fd_set);
   FD_SET (0, &active_fd_set);
 
-  // test
-  printf("file name: %s\n", argv[1]);
-
-  if ((ifp = fopen(argv[1], "rt")) == NULL) {
-    printf("Can't open input file\n");
-    exit(1);
-  }
-
-  char myDescrip[80], nextDescrip[80], myVIP[80], remoteVIP[80];
-  char * myIP, * nextIP;
-  uint16_t myPort, nextPort;
-  int id;
-
-  // reads in addr:port and splits
-  fscanf(ifp, "%s", myDescrip);
-  printf("%s\n", myDescrip);
-  myIP = strtok (myDescrip,":");
-  myPort = atoi(strtok (NULL,": "));
+  myPort = initialize_from_file(argv[1]);
 
   // creates the rec_socket, sets it to be non-blocking UDP
-  rec_socket = listenOn(myPort);
-  FD_SET (rec_socket, &active_fd_set);
-
-  int nonBlocking = 1; 
-  if ( fcntl( rec_socket,  F_SETFL,  O_NONBLOCK,  nonBlocking ) == -1 ) { 
-    printf( "failed to set non-blocking\n" ); 
-    return -1; 
-  }
-
-  printf("receive socket: %d, set to non-blocking UDP\n\n", rec_socket);
-
-  printf("myIP: %s\nmyPort: %d\n", myIP, (int) myPort);
-  
-  populate_entry_table(ifp, link_entry_table);
+  rec_socket = initialize_recieve_socket(myPort, active_set_ptr);
 
   printTable(link_entry_table);
   printf("\n");
-
 
   // Set up send socket
   if ((send_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1){ // not sure what IPPROTO_UDP is
@@ -476,10 +508,7 @@ int main(int argc, char ** argv)
     exit(EXIT_FAILURE);
   }
 
-  char c;
-  char cmd[40], sendAddress[40], message[MAX_MSG_LENGTH];
-  struct sockaddr_in send_addr;
-  entry_t extracted_entry;
+  char cmd[40];
 
   while(1){
     printf("waiting for input from the user or socket...\n");
@@ -493,18 +522,7 @@ int main(int argc, char ** argv)
     // select says there's data, go through all open file descriptors and update
     if (FD_ISSET (0, &read_fd_set)){ // data ready on stdin (0)
       scanf("%s", cmd);
-      if(strcmp("ifconfig", cmd)==0){
-        printTable(link_entry_table);
-      }
-      else if(strcmp("send", cmd)==0){
-        scanf("%s %[^\n]s", sendAddress, message);
-        send_packet(sendAddress, message, send_socket, MAX_DISTANCE, TEST_PROTOCOL, &extracted_entry);
-        printf("sent to: %s, port %d, message: %s\n", extracted_entry.interface_vip, extracted_entry.port, message);
-      }
-      else{
-        printf("not a valid command: %s\n", cmd);
-      }
-      while ((c = getchar()) != '\n' && c != EOF); // clears the stdin buffer if there's anything left
+      handle_commands(cmd, send_socket);
     }
     if (FD_ISSET (rec_socket, &read_fd_set)){ // data ready on the read socket
       printf("got data\n");
