@@ -40,15 +40,16 @@ typedef struct link_entry
 
 entry_t link_entry_table[100]; // I'm tired of trying to do this correctly
 
-/* RIP HEADER
-
-uint16_t command;
-uint16_t num_entries;
-struct {
-uint32_t cost;
-uint32_t address;
-} entries[num_entries];
-*/
+typedef struct rip_msg
+{
+    uint16_t command;
+    uint16_t num_entries;
+    
+    struct {
+        uint32_t cost;
+        uint32_t address;
+    } entries[64];
+} rip_msg_t;
 
 /* 
 IP packet header in ip.h
@@ -88,83 +89,6 @@ int isMe(char * vip, entry_t * table){
     }
     return -1;
 }
-/* example code   
-bool builtin_cmd(job_t *last_job, int argc, char **argv) {
-     if (!strcmp(argv[0], "quit")) {
-        close(flog);
-        exit(EXIT_SUCCESS);
-     }
-     else if (!strcmp("jobs", argv[0])) {
-            job_t *curJob;
-            job_t *prevJob = joblist;
-            for(curJob = joblist->next; curJob; curJob = curJob->next) {
-                 char* jobStatus = malloc(12*sizeof(char));
-                 
-                 if(job_is_completed(curJob)) jobStatus = "Completed";
-                 else if(job_is_stopped(curJob)) jobStatus = "Stopped"; 
-                 else jobStatus = "Running";
-
-                 fprintf(stdout, "%d(%s): %s\n", curJob->pgid, jobStatus, curJob->commandinfo); 
-                 
-                 if(job_is_completed(curJob)) {
-                        delete_job(curJob, joblist);
-                        curJob = prevJob;
-                 }
-                 else {
-                        prevJob = curJob;
-                 }
-            }
-     }
-     else if (!strcmp("cd", argv[0])) {
-            chdir(argv[1]);
-     }
-     else if (!strcmp("bg", argv[0])) {
-     }
-     else if (!strcmp("fg", argv[0])) {
-            if(argc > 1) {
-                 job_t *curJob;
-                 for(curJob = joblist->next; curJob; curJob = curJob->next) {
-                        char* str = malloc(15*sizeof(char));
-                        sprintf(str, "%d", (int) curJob -> pgid);
-                        if(strcmp(argv[1], str) == 0) {
-                             continue_job(curJob);
-                                         
-                             delete_job(last_job, joblist);
-                             return true;
-                        }
-                 }
-            }
-            
-            job_t *curJob;
-            job_t *lastStopped = malloc(sizeof(job_t));
-            bool stoppedProcess;
-            for(curJob = joblist->next; curJob; curJob = curJob->next) {
-                 if(job_is_stopped(curJob)) {
-                        lastStopped = curJob;
-                        stoppedProcess = true;
-                 }
-            }
-            
-            if(stoppedProcess) {
-                 continue_job(lastStopped);
-            }
-            else {
-                 fputs("No stopped jobs to resume \n",stderr);
-                 printf("No stopped jobs to resume \n");
-            }
-     }
-     else {
-            return false;
-     }
-     
-     delete_job(last_job, joblist);
-     return true;
-}
-*/
-
-/* sendUpdate(destination) 
-        if table source = destination set route metric to infinity (16)
-*/
 
 /* refreshTable()
 checks if entries are expired (older than 12 seconds)
@@ -196,65 +120,13 @@ receivePacket(char * message)
                     print packet contents
                     */
     }
-
-
+    
 /* updateTable ()
         replaces or adds entry if better distance
         updates timestamp to now
 */
 
-/*
-Edit this method to just send a message out of a socket with the input header and packet contents
-int send(uint16_t outport, header, contents)
-Also, change socket(PARAMS) to UDP instead of TCP
-
-int client(const char * addr, uint16_t port)
-{
-    int sock;
-    struct sockaddr_in server_addr;
-    char msg[MAX_MSG_LENGTH], reply[MAX_REPLY_LENGTH];
-
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Create socket error:");
-        return 1;
-    }
-
-    printf("Socket created\n");
-    server_addr.sin_addr.s_addr = inet_addr(addr);
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Connect error:");
-        return 1;
-    }
-
-    printf("Connected to server %s:%d\n", addr, port);
-
-    int recv_len = 0;
-    while (1) {
-        fflush(stdin);
-        printf("Enter message: \n");
-        gets(msg);
-        if (send(sock, msg, MAX_MSG_LENGTH, 0) < 0) {
-            perror("Send error:");
-            return 1;
-        }
-        recv_len = read(sock, reply, MAX_REPLY_LENGTH);
-        if (recv_len < 0) {
-            perror("Recv error:");
-            return 1;
-        }
-        reply[recv_len] = 0;
-        printf("Server reply:\n%s\n", reply);
-        memset(reply, 0, sizeof(reply));
-    }
-    close(sock);
-    return 0;
-}
-*/
-
-int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, uint8_t protocol, entry_t  * entry_pointer){
+int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, uint8_t protocol, entry_t * entry_pointer){
     char packet[MAX_MSG_LENGTH];
     char * mes;
     struct iphdr * ip;
@@ -293,11 +165,35 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     return 0;
 }
 
+
+sendUpdate(char * interface_vip, entry_t * table, int send_socket) {
+    // char packet[];
+    
+    // look up entry in table
+    //entry_t * entry_pointer;
+    //* entry_pointer = extractNextHopFromVIP(interface_vip, table);
+    
+    // entry_pointer ->
+    
+    rip_msg_t * payload; // sizeof or instantiation sizeof(rip_msg)
+    
+    payload -> command = 2;
+    
+    // iterate (set cost, address)
+    // if table source = destination set route metric to infinity (16)
+    // rip_msg -> entries[0]
+    //    rip_msg -> num_entries ++
+    
+    // TODO: test void pointer
+    entry_t * nextHop;
+    send_packet(interface_vip, (char *) payload, send_socket, MAX_DISTANCE, RIP_PROTOCOL, nextHop);
+}
+
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
 {
     int sock, in_sock;
                 
-    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { // SOCK_DGRAM for UDP
+    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { // SOCK_DGRAM for UDP, and IPROTO_UDP?
         perror("Create socket error");
         return -1;
     }
@@ -345,37 +241,6 @@ int listenOn(uint16_t port) {
     printf("bind done\n");
 
     return sock;
-    /*
-    while(1) {
-        
-            inet_ntop(AF_INET, &(server_addr.sin_addr), addr, len);
-            memset(msg, 0, MAX_MSG_LENGTH);
-            
-            msg[MAX_MSG_LENGTH] = '\0';
-            
-            while (len = recv(sock, msg, MAX_MSG_LENGTH, 0)) {
-                receivePacket(msg);
-                printf("recv from client: %s\n", msg);
-                sprintf(reply, "%s%s%s", msg, msg, msg);
-                send(in_sock, reply, strnlen(reply, MAX_REPLY_LENGTH), 0);
-                
-                memset(msg, 0, MAX_MSG_LENGTH);
-
-                int nonBlocking = 1; 
-                if ( fcntl( handle,  F_SETFL,  O_NONBLOCK,  nonBlocking ) == -1 ) { 
-                    printf( "failed to set non-blocking\n" ); 
-                    return false; 
-                }
-
-            }
-            
-            close(in_sock);
-            printf("client disconnected\n");
-            exit(0);
-        }
-        
-        
-        close(in_sock); */
 }
 
 int populate_entry_table(FILE * ifp, entry_t * table){
