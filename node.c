@@ -27,7 +27,7 @@
 /* socket mySocket */
 typedef struct link_entry
 {
-    //sourceofentry // what is this?
+    char source_vip[20]; // where we learned the route from
     //int connection; // what is this?
     int distance;
     int interface_id;
@@ -49,7 +49,14 @@ typedef struct ifconfig_entry
     char * status; // up or down
 } ifentry_t;
 
-entry_t link_entry_table[100]; // I'm tired of trying to do this correctly
+typedef struct route_table
+{
+    int num_entries;
+    entry_t route_entries[100];
+} route_table_t;
+
+route_table_t ROUTING_TABLE;
+// entry_t link_entry_table[100]; // I'm tired of trying to do this correctly
 ifentry_t ifconfig_table[100];
 
 typedef struct rip_msg
@@ -79,11 +86,14 @@ print_ifconfig(){
 
 // gets the table entry in the router from the VIP provided
 entry_t extractNextHopFromVIP(char * interface_vip){
-    entry_t NullStruct = { MAX_DISTANCE, -1, -1, "", "", "" };
+    entry_t NullStruct = { "", MAX_DISTANCE, -1, -1, "", "", "", "" };
+    
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
+    
     if(interface_vip == NULL) return NullStruct;
     int i;
     for(i = 0; ; i +=1){
-        entry_t e = link_entry_table[i];
+        entry_t e = route_entries[i];
         if(strcmp(interface_vip, e.interface_vip)==0) return e;
         if(e.interface_id <= 0) break;
     }
@@ -233,13 +243,20 @@ sendUpdate(char * interface_vip, int send_socket) {
     rip_msg_t * payload; // sizeof or instantiation sizeof(rip_msg)
     
     payload -> command = 2;
-    
-    //link_entry_table
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     // iterate (set cost, address)
     // if table source = destination set route metric to infinity (16)
     // rip_msg -> entries[0]
     //    rip_msg -> num_entries ++
+    int i;
+    for(i = 0; ; i +=1){
+        entry_t e = route_entries[i];
+        if(strcmp(interface_vip, e.source_vip)==0){
+            // set to infinity
+        }
+        if(e.interface_id <= 0) break;
+    }
     
     // TODO: test void pointer
     entry_t * nextHop;
@@ -305,7 +322,8 @@ int populate_entry_table(FILE * ifp){
     char nextDescrip[80], myVIP[80], remoteVIP[80];
     char * nextIP;
     uint16_t nextPort;
-
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
+    
     id = 0; // because oddly the assignment specifies the first element as id 1, not id 0
     while(!feof(ifp)){
         id++;
@@ -320,13 +338,13 @@ int populate_entry_table(FILE * ifp){
         printf("nextIP: %s, nextPort: %d\n  myVIP: %s, remoteVIP: %s\n", nextIP, (int) nextPort, myVIP, remoteVIP);
 
         // initialize the routing table
-        link_entry_table[id-1].distance = MAX_DISTANCE;
-        link_entry_table[id-1].interface_id = id;
-        link_entry_table[id-1].port = nextPort;
-        strcpy(link_entry_table[id-1].interface_ip, nextIP);
-        strcpy(link_entry_table[id-1].interface_vip, remoteVIP);
-        strcpy(link_entry_table[id-1].my_vip, myVIP);
-        link_entry_table[id-1].status = "up";
+        route_entries[id-1].distance = MAX_DISTANCE;
+        route_entries[id-1].interface_id = id;
+        route_entries[id-1].port = nextPort;
+        strcpy(route_entries[id-1].interface_ip, nextIP);
+        strcpy(route_entries[id-1].interface_vip, remoteVIP);
+        strcpy(route_entries[id-1].my_vip, myVIP);
+        route_entries[id-1].status = "up";
 
         // initialize the ifconfig table
         ifconfig_table[id-1].interface_id = id;
