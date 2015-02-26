@@ -30,12 +30,11 @@ typedef struct link_entry
     char source_vip[20]; // where we learned the route from
     //int connection; // what is this?
     int distance;
-    int interface_id;
+    int interface_id; // TODO: delete
     uint16_t port; // the actual port to send to
-    char interface_ip[20]; // the actual IP address of the connection
-    char interface_vip[20]; // the given "virtual" IP address of the connection
+    char interface_ip[20]; // the actual IP address of the connection // TODO: delete
+    char destination_vip[20]; // the given "virtual" IP address of the connection
     char my_vip[20]; // the "virtual" IP address that they have for this node
-    char * status; // up or down
     //lastupdated timestamp // not sure if necessary since we'll be doing simultaneous updates?
 } entry_t;
 
@@ -49,15 +48,20 @@ typedef struct ifconfig_entry
     char * status; // up or down
 } ifentry_t;
 
-typedef struct route_table
+typedef struct routing_table
 {
     int num_entries;
     entry_t route_entries[100];
-} route_table_t;
+} routing_table_t;
 
-route_table_t ROUTING_TABLE;
-// entry_t link_entry_table[100]; // I'm tired of trying to do this correctly
-ifentry_t ifconfig_table[100];
+typedef struct ifconfig_table
+{
+    int num_entries;
+    ifentry_t ifconfig_entries[100];
+} ifconfig_table_t;
+
+routing_table_t ROUTING_TABLE;
+ifconfig_table_t IFCONFIG_TABLE;
 
 typedef struct rip_msg
 {
@@ -75,38 +79,49 @@ IP packet header in ip.h
 */
 
 print_ifconfig(){
+    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    
     int i;
     printf("printing ifconfig:\n");
-    for(i = 0; ; i += 1){
-        ifentry_t e = ifconfig_table[i];
-        if(e.interface_id == 0) break;
+    for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){
+        ifentry_t e = ifconfig_entries[i];
         printf("%d %s %s\n", e.interface_id, e.interface_vip, e.status);
     }
 }
 
+print_routes(){
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
+    printf("Route Entries:\n");
+    int i;
+    for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
+        entry_t e = route_entries[i];
+        printf("%s\t%d\t%d\n", e.destination_vip, e.port, e.distance);
+    }
+}
+
 // gets the table entry in the router from the VIP provided
-entry_t extractNextHopFromVIP(char * interface_vip){
-    entry_t NullStruct = { "", MAX_DISTANCE, -1, -1, "", "", "", "" };
+entry_t extractNextHopFromVIP(char * destination_vip){
+    entry_t NullStruct = { "", MAX_DISTANCE, -1, -1, "", "", "" };
     
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     
-    if(interface_vip == NULL) return NullStruct;
+    if(destination_vip == NULL) return NullStruct;
     int i;
-    for(i = 0; ; i +=1){
+    for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
         entry_t e = route_entries[i];
-        if(strcmp(interface_vip, e.interface_vip)==0) return e;
-        if(e.interface_id <= 0) break;
+        if(strcmp(destination_vip, e.destination_vip)==0) return e;
     }
     return NullStruct;
 }
 
 int isMe(char * vip){
     if(vip == NULL) return -1;
+    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    
     int i;
-    for(i = 0; ; i +=1){
-        ifentry_t e = ifconfig_table[i];
+    for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
+        ifentry_t e = ifconfig_entries[i];
         if(strcmp(vip, e.my_vip)==0) return 1;
-        if(e.interface_id <= 0) break;
     }
     return -1;
 }
@@ -168,7 +183,7 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     ip->protocol    = protocol;
     ip->ttl         = TTL;
     ip->saddr       = inet_addr(entry_pointer->my_vip);
-    ip->daddr       = inet_addr(entry_pointer->interface_vip);
+    ip->daddr       = inet_addr(entry_pointer->destination_vip);
     ip->check       = ip_sum((char * )ip, ip->ihl * 4);
 
     printf("ipsum: %d\n", ip->check);
@@ -231,36 +246,30 @@ int receive_packet(int rec_socket, int send_socket){
     return 0;
 }
 
-sendUpdate(char * interface_vip, int send_socket) {
-    // char packet[];
-    
-    // look up entry in table
-    //entry_t * entry_pointer;
-    //* entry_pointer = extractNextHopFromVIP(interface_vip, table);
-    
-    // entry_pointer ->
-    
+int sendUpdate(char * destination_vip, int send_socket) {
     rip_msg_t * payload; // sizeof or instantiation sizeof(rip_msg)
     
     payload -> command = 2;
+    payload -> num_entries = ROUTING_TABLE.num_entries;
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     
-    // iterate (set cost, address)
-    // if table source = destination set route metric to infinity (16)
-    // rip_msg -> entries[0]
-    //    rip_msg -> num_entries ++
+
     int i;
-    for(i = 0; ; i +=1){
+    for(i = 0; i <= ROUTING_TABLE.num_entries; i +=1){
         entry_t e = route_entries[i];
-        if(strcmp(interface_vip, e.source_vip)==0){
-            // set to infinity
+        
+        payload -> entries[i].address = inet_addr(e.destination_vip);
+        
+        if(strcmp(destination_vip, e.source_vip)==0){
+            payload -> entries[i].cost = 16;
         }
-        if(e.interface_id <= 0) break;
+        else {
+            payload -> entries[i].cost = e.distance;
+        }
     }
     
-    // TODO: test void pointer
     entry_t * nextHop;
-    send_packet(interface_vip, (char *) payload, send_socket, MAX_DISTANCE, RIP_PROTOCOL, nextHop);
+    return send_packet(destination_vip, (char *) payload, send_socket, MAX_DISTANCE, RIP_PROTOCOL, nextHop);
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
@@ -317,12 +326,30 @@ int listenOn(uint16_t port) {
     return sock;
 }
 
+int request_routes(int send_socket){
+    
+    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    int i;
+    for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
+        ifentry_t e = ifconfig_entries[i];
+    
+        rip_msg_t * payload; // sizeof or instantiation sizeof(rip_msg)
+        
+        payload -> command = 1;
+        payload -> num_entries = 0;
+        
+        entry_t * nextHop;
+        return send_packet(e.interface_vip, (char *) payload, send_socket, MAX_DISTANCE, RIP_PROTOCOL, nextHop);
+    }
+}
+
 int populate_entry_table(FILE * ifp){
     int id;
     char nextDescrip[80], myVIP[80], remoteVIP[80];
     char * nextIP;
     uint16_t nextPort;
     entry_t * route_entries = ROUTING_TABLE.route_entries;
+    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     
     id = 0; // because oddly the assignment specifies the first element as id 1, not id 0
     while(!feof(ifp)){
@@ -338,21 +365,22 @@ int populate_entry_table(FILE * ifp){
         printf("nextIP: %s, nextPort: %d\n  myVIP: %s, remoteVIP: %s\n", nextIP, (int) nextPort, myVIP, remoteVIP);
 
         // initialize the routing table
-        route_entries[id-1].distance = MAX_DISTANCE;
+        route_entries[id-1].distance = 1;
         route_entries[id-1].interface_id = id;
         route_entries[id-1].port = nextPort;
         strcpy(route_entries[id-1].interface_ip, nextIP);
-        strcpy(route_entries[id-1].interface_vip, remoteVIP);
+        strcpy(route_entries[id-1].destination_vip, remoteVIP);
         strcpy(route_entries[id-1].my_vip, myVIP);
-        route_entries[id-1].status = "up";
-
+        ROUTING_TABLE.num_entries++;
+        
         // initialize the ifconfig table
-        ifconfig_table[id-1].interface_id = id;
-        ifconfig_table[id-1].port = nextPort;
-        strcpy(ifconfig_table[id-1].interface_ip, nextIP);
-        strcpy(ifconfig_table[id-1].interface_vip, remoteVIP);
-        strcpy(ifconfig_table[id-1].my_vip, myVIP);
-        ifconfig_table[id-1].status = "up";
+        ifconfig_entries[id-1].interface_id = id;
+        ifconfig_entries[id-1].port = nextPort;
+        strcpy(ifconfig_entries[id-1].interface_ip, nextIP);
+        strcpy(ifconfig_entries[id-1].interface_vip, remoteVIP);
+        strcpy(ifconfig_entries[id-1].my_vip, myVIP);
+        ifconfig_entries[id-1].status = "up";
+        IFCONFIG_TABLE.num_entries++;
     }
 }
 
@@ -361,18 +389,21 @@ int handle_commands(char * cmd, int send_socket){
     entry_t extracted_entry;
 
     if(strcmp("ifconfig", cmd)==0){
-        print_ifconfig(ifconfig_table);
+        print_ifconfig();
     }
     else if(strcmp("send", cmd)==0){
         scanf("%s %[^\n]s", sendAddress, message);
         send_packet(sendAddress, message, send_socket, MAX_DISTANCE, TEST_PROTOCOL, &extracted_entry);
-        printf("sent to: %s, port %d, message: %s\n", extracted_entry.interface_vip, extracted_entry.port, message);
+        printf("sent to: %s, port %d, message: %s\n", extracted_entry.destination_vip, extracted_entry.port, message);
     }
     else if(strcmp("mtu", cmd)==0){ // extra credit
         int link_int, mtu_size;
         scanf("%d %d", &link_int, &mtu_size);
 
         printf("mtu for link %d set to %d\n", link_int, mtu_size);
+    }
+    else if(strcmp("routes", cmd)==0){
+        print_routes();
     }
     else{
         printf("not a valid command: %s\n", cmd);
@@ -405,7 +436,6 @@ int initialize_from_file(char * file_name){
     populate_entry_table(ifp);
 
     return myPort;
-
 }
 
 int initialize_recieve_socket(int myPort, fd_set * active_fd_set){
@@ -462,7 +492,8 @@ int main(int argc, char ** argv)
         perror("send socket error");
         exit(EXIT_FAILURE);
     }
-
+    
+    // request_routes(send_socket);
     char cmd[40];
 
     while(1){
