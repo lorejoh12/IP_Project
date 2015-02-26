@@ -42,6 +42,7 @@ typedef struct link_entry
 typedef struct ifconfig_entry
 {
     int interface_id;
+    int mtu_size;
     uint16_t port; // the actual port to send to
     char interface_ip[20]; // the actual IP address of the connection
     char interface_vip[20]; // the given "virtual" IP address of the connection
@@ -85,6 +86,18 @@ entry_t extractNextHopFromVIP(char * interface_vip){
     for(i = 0; ; i +=1){
         entry_t e = link_entry_table[i];
         if(strcmp(interface_vip, e.interface_vip)==0) return e;
+        if(e.interface_id <= 0) break;
+    }
+    return NullStruct;
+}
+
+ifentry_t extractIfEntryFromPort(int port){
+    ifentry_t NullStruct = { MAX_DISTANCE, -1, -1, "", "", "" };
+    if(port == 0) return NullStruct;
+    int i;
+    for(i = 0; ; i +=1){
+        ifentry_t e = ifconfig_table[i];
+        if(e.port == port) return e;
         if(e.interface_id <= 0) break;
     }
     return NullStruct;
@@ -142,8 +155,11 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     char * mes;
     struct iphdr * ip;
     struct sockaddr_in send_addr;
+    ifentry_t ifentry;
 
     * entry_pointer = extractNextHopFromVIP(dest_addr);
+    ifentry = extractIfEntryFromPort(entry_pointer->port);
+
     if(entry_pointer->interface_id <=0){
         printf("failed to send: intended recipient not in table\n");
         return -1;
@@ -335,6 +351,7 @@ int populate_entry_table(FILE * ifp){
         strcpy(ifconfig_table[id-1].interface_vip, remoteVIP);
         strcpy(ifconfig_table[id-1].my_vip, myVIP);
         ifconfig_table[id-1].status = "up";
+        ifconfig_table[id-1].mtu_size = 0; // default, no mtu value
     }
 }
 
@@ -343,7 +360,7 @@ int handle_commands(char * cmd, int send_socket){
     entry_t extracted_entry;
 
     if(strcmp("ifconfig", cmd)==0){
-        print_ifconfig(ifconfig_table);
+        print_ifconfig();
     }
     else if(strcmp("send", cmd)==0){
         scanf("%s %[^\n]s", sendAddress, message);
@@ -353,8 +370,18 @@ int handle_commands(char * cmd, int send_socket){
     else if(strcmp("mtu", cmd)==0){ // extra credit
         int link_int, mtu_size;
         scanf("%d %d", &link_int, &mtu_size);
-
+        ifconfig_table[link_int-1].mtu_size = mtu_size;
         printf("mtu for link %d set to %d\n", link_int, mtu_size);
+    }
+    else if(strcmp("down", cmd)==0){
+        int id;
+        scanf("%d", &id);
+        ifconfig_table[id-1].status = "down";
+    }
+    else if(strcmp("up", cmd)==0){
+        int id;
+        scanf("%d", &id);
+        ifconfig_table[id-1].status = "up";
     }
     else{
         printf("not a valid command: %s\n", cmd);
@@ -448,7 +475,7 @@ int main(int argc, char ** argv)
     char cmd[40];
 
     while(1){
-        printf("waiting for input from the user or socket...\n");
+        printf("\nwaiting for input from the user or socket...\n");
 
         read_fd_set = active_fd_set;
         if (select (FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0){ // 3rd NULL, no timeout in this example
