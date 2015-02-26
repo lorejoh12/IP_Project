@@ -269,6 +269,7 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
 
     ip = (struct iphdr*) packet;
 
+    ip->check       = 0; // so that checksum will be calculated properly
     ip-> ihl        = (unsigned int) sizeof(struct iphdr) / 4; // 4 bytes to a word, ihl stores number of words in header
     ip->version     = 4;
     ip->tot_len     = ip->ihl * 4 + strlen(payload);
@@ -276,7 +277,9 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     ip->ttl         = TTL;
     ip->saddr       = inet_addr(entry_pointer->my_vip);
     ip->daddr       = inet_addr(entry_pointer->interface_vip);
-    ip->check       = 5;
+    ip->check       = ip_sum((char * )ip, ip->ihl * 4);
+
+    printf("ipsum: %d\n", ip->check);
 
     mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
     strcpy(mes, payload); // copy the payload from into the packet
@@ -300,11 +303,21 @@ int receive_packet(int rec_socket, int send_socket, entry_t * link_entry_table){
     struct iphdr * recv_ip;
     struct sockaddr_in sa;
     entry_t * nextHop;
+    int calculated_check, received_check;
 
     recv(rec_socket, recv_packet, MAX_READIN_BUFFER, 0);
 
     recv_ip = (struct iphdr*) recv_packet;
     payload = (char *)(recv_packet + recv_ip->ihl * 4);
+
+    received_check = recv_ip->check;
+    recv_ip->check = 0;
+    calculated_check  = ip_sum((char *) recv_ip, recv_ip->ihl * 4);
+
+    if(received_check != calculated_check){ // the checksums don't match, drop packet
+        printf("Checksums don't match (%d, %d), dropping packet\n", calculated_check, received_check);
+        return -1;
+    }
 
     // check protocol to see if this is RIP or test send message
     if(recv_ip->protocol == TEST_PROTOCOL){
@@ -323,6 +336,7 @@ int receive_packet(int rec_socket, int send_socket, entry_t * link_entry_table){
     else{ // unknown protocol
         printf("received packet with unknown protocol, value: %d\n", (int)recv_ip->protocol);
     }
+    return 0;
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
