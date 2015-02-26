@@ -1,5 +1,4 @@
 #include <netinet/ip.h>
-
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -8,6 +7,8 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <fcntl.h>
+
+#include "ipsum.h"
 
 #define MAX_MSG_LENGTH (1400)
 #define MAX_BACK_LOG (5)
@@ -275,8 +276,7 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     ip->ttl         = TTL;
     ip->saddr       = inet_addr(entry_pointer->my_vip);
     ip->daddr       = inet_addr(entry_pointer->interface_vip);
-    // TODO calculate checksum
-    ip->check       = 5;//in_cksum((unsigned short *)ip, sizeof(struct iphdr)); 
+    ip->check       = 5;
 
     mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
     strcpy(mes, payload); // copy the payload from into the packet
@@ -291,6 +291,38 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     }
 
     return 0;
+}
+
+int receive_packet(int rec_socket, int send_socket, entry_t * link_entry_table){
+    char recv_packet[MAX_READIN_BUFFER];
+    char * payload;
+    char dest_addr[20];
+    struct iphdr * recv_ip;
+    struct sockaddr_in sa;
+    entry_t * nextHop;
+
+    recv(rec_socket, recv_packet, MAX_READIN_BUFFER, 0);
+
+    recv_ip = (struct iphdr*) recv_packet;
+    payload = (char *)(recv_packet + recv_ip->ihl * 4);
+
+    // check protocol to see if this is RIP or test send message
+    if(recv_ip->protocol == TEST_PROTOCOL){
+        inet_ntop(AF_INET, &(recv_ip->daddr), dest_addr, INET_ADDRSTRLEN); // store string representation of the address in dest_addr
+
+        if(isMe(dest_addr, link_entry_table)<0){ // not in the table, need to forward
+            send_packet(dest_addr, payload, send_socket, (recv_ip->ttl) - 1, recv_ip->protocol, nextHop); // decrement ttl by 1, nextHop currently unused
+        }
+        else{
+            printf("message: %s\n", payload);
+        }
+    }
+    else if(recv_ip->protocol == RIP_PROTOCOL){
+        // TODO: Leevi, fill this out
+    }
+    else{ // unknown protocol
+        printf("received packet with unknown protocol, value: %d\n", (int)recv_ip->protocol);
+    }
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
@@ -525,30 +557,7 @@ int main(int argc, char ** argv)
             handle_commands(cmd, send_socket);
         }
         if (FD_ISSET (rec_socket, &read_fd_set)){ // data ready on the read socket
-            printf("got data\n");
-
-            char recv_packet[MAX_READIN_BUFFER];
-            char * payload;
-            char dest_addr[20];
-            struct iphdr * recv_ip;
-            struct sockaddr_in sa;
-            entry_t * nextHop;
-
-            recv(rec_socket, recv_packet, MAX_READIN_BUFFER, 0);
-
-            recv_ip = (struct iphdr*) recv_packet;
-            payload = (char *)(recv_packet + recv_ip->ihl * 4);
-
-            // check protocol to see if this is RIP or test send message
-
-            inet_ntop(AF_INET, &(recv_ip->daddr), dest_addr, INET_ADDRSTRLEN);
-
-            if(isMe(dest_addr, link_entry_table)<0){ // not in the table, need to forward
-                send_packet(dest_addr, payload, send_socket, (recv_ip->ttl) - 1, recv_ip->protocol, nextHop); // decrement ttl by 1, nextHop currently unused
-            }
-            else{
-                printf("message: %s\n", payload);
-            }
+            receive_packet(rec_socket, send_socket, link_entry_table);
         }
     }
 }
