@@ -142,7 +142,7 @@ ifentry_t extractIfEntryFromVIP(char * interface_vip){
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
         ifentry_t e = ifconfig_entries[i];
-        if(e.interface_vip == interface_vip) return e;
+        if(strcmp(e.interface_vip, interface_vip)==0) return e;
     }
     return NullStruct;
 }
@@ -184,15 +184,13 @@ checks if entries are expired (older than 12 seconds)
 update_routes (char * source_vip, uint32_t cost, uint32_t address){
     char dest_addr[20];
     inet_ntop(AF_INET, &(address), dest_addr, INET_ADDRSTRLEN);
-    
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     entry_t * e = get_route_entry(dest_addr); // can be null
     
     ifentry_t ifentry = extractIfEntryFromVIP(source_vip);
-    // printf("%d\n", e -> distance);
         
     if(e == NULL){
-        printf("updating table\n");
+        printf("Adding entry to table, need to update timestamp\n");
         int entryID = ROUTING_TABLE.num_entries;
         
         strcpy(route_entries[entryID].source_vip, source_vip);
@@ -206,10 +204,11 @@ update_routes (char * source_vip, uint32_t cost, uint32_t address){
         // need to set timestamp == now
     }
     else if(e -> distance > cost) {
-        printf("need to update table and timestamp\n");
+        printf("Need to update table entry and timestamp\n");
     }   
     else{
-        printf("update timestamp\n");
+        //else if entry is already in the table
+        printf("Just updating timestamp\n");
     }
 }
 
@@ -247,10 +246,13 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
     memcpy(mes, payload, payload_size); // copy the payload from into the packet
     
+    //rip_msg_t * rip_msg = (rip_msg_t *) payload;
+    //printf("sending: %d\n", rip_msg -> entries[0].address);
+    
     send_addr.sin_addr.s_addr = inet_addr(entry_pointer->interface_ip);
     send_addr.sin_family = AF_INET;
     send_addr.sin_port = htons(entry_pointer->port);
-
+    
     if (sendto(send_socket, packet, ip->tot_len, 0, (struct sockaddr*) &send_addr, sizeof(send_addr))==-1) {
         perror("failed to send message");
         return -1;
@@ -296,7 +298,6 @@ int receive_packet(int rec_socket, int send_socket){
     else if(recv_ip->protocol == RIP_PROTOCOL){
         rip_msg_t * rip_msg = (rip_msg_t*) payload;
         inet_ntop(AF_INET, &(recv_ip->saddr), dest_addr, INET_ADDRSTRLEN);
-         
         if(rip_msg -> command == 1) {
             sendUpdate(dest_addr, send_socket);
         }
@@ -322,7 +323,7 @@ int sendUpdate(char * destination_vip, int send_socket) {
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
-    for(i = 0; i <= ROUTING_TABLE.num_entries; i +=1){
+    for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
         entry_t e = route_entries[i];
         
         payload -> entries[i].address = inet_addr(e.destination_vip);
@@ -332,10 +333,11 @@ int sendUpdate(char * destination_vip, int send_socket) {
         else {
             payload -> entries[i].cost = e.distance;
         }
+        printf("sending: %d, %d\n", payload -> entries[i].cost, payload -> entries[i].address);
     }
     entry_t nextHop;
    
-    return send_packet(destination_vip, (char*) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
+    return send_packet(destination_vip, (char*) payload, sizeof(rip_msg_t), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
@@ -399,13 +401,13 @@ int request_routes(int send_socket){
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
         ifentry_t e = ifconfig_entries[i];
     
-        rip_msg_t * payload; // sizeof or instantiation sizeof(rip_msg)
+        rip_msg_t * payload = malloc(sizeof(rip_msg_t)); // sizeof or instantiation sizeof(rip_msg)
         payload -> command = 1;
         payload -> num_entries = 0;
         
         entry_t nextHop;
         
-        return send_packet(e.interface_vip, (char *) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
+        return send_packet(e.interface_vip, (char *) payload, sizeof(rip_msg_t), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
     }
 }
 
