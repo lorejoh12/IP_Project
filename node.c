@@ -30,6 +30,7 @@ typedef struct route_entry
 {
     char source_vip[20]; // where we learned the route from
     int distance;
+    int interface_id;
     char destination_vip[20]; // the given "virtual" IP address of the connection
    //lastupdated timestamp // not sure if necessary since we'll be doing simultaneous updates?
 } entry_t;
@@ -88,7 +89,7 @@ print_ifconfig(){
 
 // gets the table entry in the router from the VIP provided
 entry_t extractNextHopFromVIP(char * destination_vip){
-    entry_t NullStruct = { "", -1, "" };
+    entry_t NullStruct = { "", -1, -1, "" };
     
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     
@@ -96,7 +97,6 @@ entry_t extractNextHopFromVIP(char * destination_vip){
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
         entry_t e = route_entries[i];
-        
         if(strcmp(destination_vip, e.destination_vip)==0) return e;
     }
     return NullStruct;
@@ -150,9 +150,9 @@ print_routes(){
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
         entry_t e = route_entries[i];
-        ifentry_t ife = extractIfEntryFromVIP(e.destination_vip);
+        //ifentry_t ife = extractIfEntryFromVIP(e.destination_vip);
 
-        printf("%s\t%d\t%d\n", e.destination_vip, ife.interface_id, e.distance);
+        printf("%s\t%d\t%d\n", e.destination_vip, e.interface_id, e.distance);
     }
 }
 
@@ -184,12 +184,13 @@ update_routes (char * source_vip, uint32_t cost, uint32_t address){
     entry_t * e = get_route_entry(dest_addr); // can be null
     
     ifentry_t ifentry = extractIfEntryFromVIP(source_vip);
-        
+    
     if(e == NULL){
         printf("Adding entry to table, need to update timestamp\n");
         int entryID = ROUTING_TABLE.num_entries;
         
         strcpy(route_entries[entryID].source_vip, source_vip);
+        route_entries[entryID].interface_id = ifentry.interface_id;
         route_entries[entryID].distance = cost + 1;
         strcpy(route_entries[entryID].destination_vip, dest_addr);
         ROUTING_TABLE.num_entries++;
@@ -480,9 +481,10 @@ int populate_entry_table(FILE * ifp){
         strcpy(route_entries[id-1].source_vip, LOCALHOST_IP); // generated from self
         route_entries[id-1].distance = 1;
         strcpy(route_entries[id-1].destination_vip, remoteVIP);
-        ROUTING_TABLE.num_entries++;
+        route_entries[id-1].interface_id = id;
         
-        update_routes (LOCALHOST_IP, 0, *myVIP);
+        ROUTING_TABLE.num_entries++;
+        //update_routes (LOCALHOST_IP, 1, *remoteVIP);
 
         // initialize the ifconfig table
         ifconfig_entries[id-1].interface_id = id;
@@ -493,6 +495,8 @@ int populate_entry_table(FILE * ifp){
         ifconfig_entries[id-1].status = "up";
         ifconfig_entries[id-1].mtu_size = 0;
         IFCONFIG_TABLE.num_entries++;
+        
+        update_routes (LOCALHOST_IP, -1, inet_addr(ifconfig_entries[id-1].my_vip));
     }
 }
 
