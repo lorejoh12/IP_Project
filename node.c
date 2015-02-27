@@ -322,17 +322,17 @@ int receive_packet(int rec_socket, int send_socket){
 
     if((recv_ip->frag_off & IP_MF) == IP_MF){ // receiving more fragments, pass into the buffer and do nothing
         printf("got an IP_MF\n");
-        strcpy(fragment_buffer + (recv_ip->frag_off & IP_OFFMASK), recv_payload);
+        memcpy(fragment_buffer + (recv_ip->frag_off & IP_OFFMASK), recv_payload, MAX_READIN_BUFFER);
         fragmenting = 1;
         return 0;
     }
 
     if(fragmenting){
-        strcpy(fragment_buffer + (recv_ip->frag_off & IP_OFFMASK), recv_payload);
-        strcpy(payload, fragment_buffer);
+        memcpy(fragment_buffer + (recv_ip->frag_off & IP_OFFMASK), recv_payload, MAX_READIN_BUFFER);
+        memcpy(payload, fragment_buffer, MAX_READIN_BUFFER);
     }
     else
-        strcpy(payload, recv_payload);
+        memcpy(payload, recv_payload, MAX_READIN_BUFFER);
     
     fragmenting = 0;
 
