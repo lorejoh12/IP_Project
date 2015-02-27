@@ -20,6 +20,7 @@
 
 #define RIP_PROTOCOL 200
 #define TEST_PROTOCOL 0
+#define DEFAULT_IP_HEADER_SIZE 5
 
 /* table of table entries */
 /* table of link interfaces along with their status (up or down) */
@@ -213,7 +214,23 @@ update_routes (char * source_vip, uint32_t cost, uint32_t address){
     }
 }
 
-int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, uint8_t TTL, uint8_t protocol, entry_t * entry_pointer){
+send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packet, struct sockaddr_in send_addr, int size, entry_t * entry_pointer){
+    char * mes;
+
+    mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
+    strncpy(mes, payload, size); // copy the rest of the payload into the packet
+
+    send_addr.sin_addr.s_addr = inet_addr(entry_pointer->interface_ip);
+    send_addr.sin_family = AF_INET;
+    send_addr.sin_port = htons(entry_pointer->port);
+
+    if (sendto(send_socket, packet, ip->tot_len, 0, (struct sockaddr*) &send_addr, sizeof(send_addr))==-1) {
+        perror("failed to send message");
+        return -1;
+    }
+}
+
+int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, uint8_t TTL, uint8_t protocol, int header_size, entry_t * entry_pointer){
     char packet[MAX_MSG_LENGTH];
     char * mes;
     struct iphdr * ip;
@@ -230,48 +247,70 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
         return -1;
     }
 
+    memset(&packet[0], 0, sizeof(packet));
+
     ip = (struct iphdr*) packet;
 
-    ip->check       = 0; // so that checksum will be calculated properly
-    ip-> ihl        = (unsigned int) sizeof(struct iphdr) / 4; // 4 bytes to a word, ihl stores number of words in header
+    ip-> ihl        = header_size; // 4 bytes to a word, ihl stores number of words in header
+    ip-> id         = rand(); // 
     ip->version     = 4;
-    ip->tot_len     = ip->ihl * 4 + payload_size;
     ip->protocol    = protocol;
     ip->ttl         = TTL;
     ip->saddr       = inet_addr(entry_pointer->my_vip);
     ip->daddr       = inet_addr(entry_pointer->destination_vip);
-    ip->check       = ip_sum((char * )ip, ip->ihl * 4);
 
-    printf("ipsum: %d\n", ip->check);
+    total_size = header_size * 4 + strlen(payload);
+    int payload_size_fragmented = (ifentry.mtu_size - header_size*4);
 
-    mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
-    memcpy(mes, payload, payload_size); // copy the payload from into the packet
-    
-    send_addr.sin_addr.s_addr = inet_addr(entry_pointer->interface_ip);
-    send_addr.sin_family = AF_INET;
-    send_addr.sin_port = htons(entry_pointer->port);
+    int fragment_i = 0;
+    while(ifentry.mtu_size > 0 && total_size > ifentry.mtu_size){ // need to fragment
+        ip->check       = 0;
+        ip->tot_len     = ip->ihl * 4 + payload_size_fragmented;
 
-    if (sendto(send_socket, packet, ip->tot_len, 0, (struct sockaddr*) &send_addr, sizeof(send_addr))==-1) {
-        perror("failed to send message");
-        return -1;
+        // if DF is set and it tries to fragment, fail
+
+        uint16_t fragment;
+        fragment = fragment | IP_MF;
+        ip->frag_off = fragment_i * payload_size_fragmented + fragment;
+        ip->check = ip_sum((char * )ip, ip->ihl * 4);
+
+        send_packet_raw(send_socket, payload, ip, packet, send_addr, payload_size_fragmented, entry_pointer);
+
+        payload = payload + payload_size_fragmented;
+        total_size -= payload_size_fragmented;
+        fragment_i ++;
     }
+
+    ip->tot_len         = ip->ihl * 4 + payload_size - fragment_i*payload_size_fragmented;
+    ip->check           = 0;
+    ip->frag_off        = fragment_i * payload_size_fragmented;
+    ip->check           = ip_sum((char * )ip, ip->ihl * 4);
+
+    send_packet_raw(send_socket, payload, ip, packet, send_addr, ip->tot_len, entry_pointer);
 
     return 0;
 }
 
+char fragment_buffer[MAX_READIN_BUFFER];
+int fragment_id;
+int fragmenting = 0;
+
 int receive_packet(int rec_socket, int send_socket){
     char recv_packet[MAX_READIN_BUFFER];
-    char * payload;
+    char payload[MAX_READIN_BUFFER];
+    char * recv_payload;
     char dest_addr[20];
     struct iphdr * recv_ip;
     struct sockaddr_in sa;
     entry_t nextHop;
     int calculated_check, received_check;
 
+    memset(&recv_packet[0], 0, sizeof(recv_packet)); // clear the recv buffer for new incoming messages
+
     recv(rec_socket, recv_packet, MAX_READIN_BUFFER, 0);
 
     recv_ip = (struct iphdr*) recv_packet;
-    payload = (char *)(recv_packet + recv_ip->ihl * 4);
+    recv_payload = (char *)(recv_packet + recv_ip->ihl * 4);
 
     received_check = recv_ip->check;
     recv_ip->check = 0;
@@ -282,12 +321,27 @@ int receive_packet(int rec_socket, int send_socket){
         return -1;
     }
 
+    if((recv_ip->frag_off & IP_MF) == IP_MF){ // receiving more fragments, pass into the buffer and do nothing
+        printf("got an IP_MF\n");
+        strcpy(fragment_buffer + (recv_ip->frag_off & IP_OFFMASK), recv_payload);
+        fragmenting = 1;
+        return 0;
+    }
+
+    if(fragmenting){
+        strcpy(fragment_buffer + (recv_ip->frag_off & IP_OFFMASK), recv_payload);
+        strcpy(payload, fragment_buffer);
+    }
+    else
+        strcpy(payload, recv_payload);
+    fragmenting = 0;
+
     // check protocol to see if this is RIP or test send message
     if(recv_ip->protocol == TEST_PROTOCOL){
         inet_ntop(AF_INET, &(recv_ip->daddr), dest_addr, INET_ADDRSTRLEN); // store string representation of the address in dest_addr
 
         if(isMe(dest_addr)<0){ // not in the table, need to forward
-            send_packet(dest_addr, payload, strlen(payload), send_socket, (recv_ip->ttl) - 1, recv_ip->protocol, &nextHop); // decrement ttl by 1, nextHop currently unused
+            send_packet(dest_addr, payload, strlen(payload), send_socket, (recv_ip->ttl) - 1, recv_ip->protocol, recv_ip->ihl, &nextHop); // decrement ttl by 1, nextHop currently unused
         }
         else{
             printf("message: %s\n", payload);
@@ -333,9 +387,9 @@ int sendUpdate(char * destination_vip, int send_socket) {
             payload -> entries[i].cost = e.distance;
         }
     }
+    
     entry_t nextHop;
-   
-    return send_packet(destination_vip, (char*) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
+    return send_packet(destination_vip, (char *) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
@@ -404,8 +458,7 @@ int request_routes(int send_socket){
         payload -> num_entries = 0;
         
         entry_t nextHop;
-        
-        return send_packet(e.interface_vip, (char *) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
+        return send_packet(e.interface_vip, (char *) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
     }
 }
 
@@ -462,7 +515,7 @@ int handle_commands(char * cmd, int send_socket){
     }
     else if(strcmp("send", cmd)==0){
         scanf("%s %[^\n]s", sendAddress, message);
-        send_packet(sendAddress, message, strlen(message), send_socket, MAX_DISTANCE, TEST_PROTOCOL, &extracted_entry);
+        send_packet(sendAddress, message, strlen(message), send_socket, MAX_DISTANCE, TEST_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &extracted_entry);
         printf("sent to: %s, port %d, message: %s\n", extracted_entry.destination_vip, extracted_entry.port, message);
     }
     else if(strcmp("mtu", cmd)==0){ // extra credit
