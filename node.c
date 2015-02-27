@@ -207,8 +207,7 @@ update_routes (char * source_vip, uint32_t cost, uint32_t address){
     else if(e -> distance > cost) {
         printf("Need to update table entry and timestamp\n");
     }   
-    else{
-        //else if entry is already in the table
+    else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == cost)){
         printf("Just updating timestamp\n");
     }
 }
@@ -386,7 +385,7 @@ int sendUpdate(char * destination_vip, int send_socket) {
         else {
             payload -> entries[i].cost = e.distance;
         }
-        printf("sending: %d, %d\n", payload -> entries[i].cost, payload -> entries[i].address);
+        printf("sending: %d, %s\n", payload -> entries[i].cost, e.destination_vip);
     }
     
     entry_t nextHop;
@@ -496,6 +495,8 @@ int populate_entry_table(FILE * ifp){
         strcpy(route_entries[id-1].my_vip, myVIP);
         ROUTING_TABLE.num_entries++;
         
+        update_routes (LOCALHOST_IP, 0, *myVIP);
+
         // initialize the ifconfig table
         ifconfig_entries[id-1].interface_id = id;
         ifconfig_entries[id-1].port = nextPort;
