@@ -110,10 +110,11 @@ entry_t * get_route_entry(char * destination_vip){
     
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
-        route_entries++;
-        entry_t e = route_entries[i];
+        entry_t e = route_entries[0];
         
         if(strcmp(destination_vip, e.destination_vip)==0) return (entry_t *) route_entries;
+        
+        route_entries++;
     }
     return NULL;
 }
@@ -150,7 +151,6 @@ print_routes(){
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
         entry_t e = route_entries[i];
-        //ifentry_t ife = extractIfEntryFromVIP(e.destination_vip);
 
         printf("%s\t%d\t%d\n", e.destination_vip, e.interface_id, e.distance);
     }
@@ -177,23 +177,24 @@ checks if entries are expired (older than 12 seconds)
         return appropriate entry/value/port
 */
     
-update_routes (char * source_vip, uint32_t cost, uint32_t address){
+update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t address){
     char dest_addr[20];
     inet_ntop(AF_INET, &(address), dest_addr, INET_ADDRSTRLEN);
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     entry_t * e = get_route_entry(dest_addr); // can be null
     
-    ifentry_t ifentry = extractIfEntryFromVIP(source_vip);
-    
+    ifentry_t ifentry = extractIfEntryFromVIP(next_vip);
+    int entryID = ROUTING_TABLE.num_entries;
+        
     if(e == NULL){
         printf("Adding entry to table, need to update timestamp\n");
-        int entryID = ROUTING_TABLE.num_entries;
-        
+    
         strcpy(route_entries[entryID].source_vip, source_vip);
         route_entries[entryID].interface_id = ifentry.interface_id;
         route_entries[entryID].distance = cost + 1;
         strcpy(route_entries[entryID].destination_vip, dest_addr);
         ROUTING_TABLE.num_entries++;
+        
         // need to set timestamp == now
     }
     else if(e -> distance > cost) {
@@ -341,14 +342,13 @@ int receive_packet(int rec_socket, int send_socket){
     else if(recv_ip->protocol == RIP_PROTOCOL){
         rip_msg_t * rip_msg = (rip_msg_t*) payload;
         inet_ntop(AF_INET, &(recv_ip->saddr), dest_addr, INET_ADDRSTRLEN);
-        printf("command: %d", rip_msg -> num_entries);
         if(rip_msg -> command == 1) {
             sendUpdate(dest_addr, send_socket);
         }
         else if(rip_msg -> command == 2){
             int i;
             for(i = 0; i < rip_msg -> num_entries; i += 1){
-                update_routes(dest_addr, rip_msg -> entries[i].cost, rip_msg -> entries[i].address);
+                update_routes(dest_addr, dest_addr, rip_msg -> entries[i].cost, rip_msg -> entries[i].address);
             }
         }
     }
@@ -377,7 +377,6 @@ int sendUpdate(char * destination_vip, int send_socket) {
         else {
             payload -> entries[i].cost = e.distance;
         }
-        printf("sending: %d, %s\n", payload -> entries[i].cost, e.destination_vip);
     }
     
     entry_t nextHop;
@@ -477,15 +476,7 @@ int populate_entry_table(FILE * ifp){
 
         printf("nextIP: %s, nextPort: %d\n  myVIP: %s, remoteVIP: %s\n", nextIP, (int) nextPort, myVIP, remoteVIP);
 
-        // initialize the routing table
-        strcpy(route_entries[id-1].source_vip, LOCALHOST_IP); // generated from self
-        route_entries[id-1].distance = 1;
-        strcpy(route_entries[id-1].destination_vip, remoteVIP);
-        route_entries[id-1].interface_id = id;
         
-        ROUTING_TABLE.num_entries++;
-        //update_routes (LOCALHOST_IP, 1, *remoteVIP);
-
         // initialize the ifconfig table
         ifconfig_entries[id-1].interface_id = id;
         ifconfig_entries[id-1].port = nextPort;
@@ -496,7 +487,9 @@ int populate_entry_table(FILE * ifp){
         ifconfig_entries[id-1].mtu_size = 0;
         IFCONFIG_TABLE.num_entries++;
         
-        update_routes (LOCALHOST_IP, -1, inet_addr(ifconfig_entries[id-1].my_vip));
+        // initialize the routing table  
+        update_routes (LOCALHOST_IP, remoteVIP, 0, inet_addr(remoteVIP));
+        update_routes (LOCALHOST_IP, LOCALHOST_IP, -1, inet_addr(myVIP));
     }
 }
 
