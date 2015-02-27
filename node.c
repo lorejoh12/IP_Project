@@ -25,7 +25,7 @@
 /* table of link interfaces along with their status (up or down) */
 /* uint16_t myPort */
 /* socket mySocket */
-typedef struct link_entry
+typedef struct route_entry
 {
     char source_vip[20]; // where we learned the route from
     //int connection; // what is this?
@@ -90,16 +90,6 @@ print_ifconfig(){
     }
 }
 
-print_routes(){
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
-    printf("Route Entries:\n");
-    int i;
-    for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
-        entry_t e = route_entries[i];
-        printf("%s\t%d\t%d\n", e.destination_vip, e.port, e.distance);
-    }
-}
-
 // gets the table entry in the router from the VIP provided
 entry_t extractNextHopFromVIP(char * destination_vip){
     entry_t NullStruct = { "", MAX_DISTANCE, -1, -1, "", "", "" };
@@ -110,23 +100,64 @@ entry_t extractNextHopFromVIP(char * destination_vip){
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
         entry_t e = route_entries[i];
+        
         if(strcmp(destination_vip, e.destination_vip)==0) return e;
     }
     return NullStruct;
 }
+/*
+* Return pointer to relevant table entry
+*/
+entry_t * get_route_entry(char * destination_vip){
+    
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
+    
+    int i;
+    for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
+        route_entries++;
+        entry_t e = route_entries[i];
+        
+        if(strcmp(destination_vip, e.destination_vip)==0) return (entry_t *) route_entries;
+    }
+    return NULL;
+}
 
+/* Deprecated */
 ifentry_t extractIfEntryFromPort(int port){
     ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
 
-    ifentry_t NullStruct = { MAX_DISTANCE, -1, -1, "", "", "" };
-    if(port == 0) return NullStruct;
+    ifentry_t NullStruct = { -1, -1, -1, "", "", "", "" };
     int i;
-    for(i = 0; ; i +=1){
+    for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
         ifentry_t e = ifconfig_entries[i];
         if(e.port == port) return e;
-        if(e.interface_id <= 0) break;
     }
     return NullStruct;
+}
+
+ifentry_t extractIfEntryFromVIP(char * interface_vip){
+    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+
+    ifentry_t NullStruct = { -1, -1, -1, "", "", "", "" };
+    int i;
+    for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
+        ifentry_t e = ifconfig_entries[i];
+        if(e.interface_vip == interface_vip) return e;
+    }
+    return NullStruct;
+}
+
+print_routes(){
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
+    printf("Route Entries:\n");
+    printf("Destination\tif_ID\tDistance\n");
+    int i;
+    for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
+        entry_t e = route_entries[i];
+        ifentry_t ife = extractIfEntryFromPort(e.port);
+
+        printf("%s\t%d\t%d\n", e.destination_vip, ife.interface_id, e.distance);
+    }
 }
 
 int isMe(char * vip){
@@ -149,35 +180,40 @@ checks if entries are expired (older than 12 seconds)
         call refreshtable
         return appropriate entry/value/port
 */
-
-receivePacket(char * message)
-{
-    /*call upon receiving a packet
     
-    if(dest != myPort) {
-            calculate IP checksum
-            decrement TTL
-            do any other necessary header changes and such
-            referenceTable() - get necessary information
-            send(header, packet)
-    }
-    else {
-            if IP protocol field = 200
-                    if command = 1
-                            sendUpdate(request source)
-                    else if command =2
-                            read and updateTable(entry)
-            else
-                    print packet contents
-                    */
-    }
+update_routes (char * source_vip, uint32_t cost, uint32_t address){
+    char dest_addr[20];
+    inet_ntop(AF_INET, &(address), dest_addr, INET_ADDRSTRLEN);
     
-/* updateTable ()
-        replaces or adds entry if better distance
-        updates timestamp to now
-*/
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
+    entry_t * e = get_route_entry(dest_addr); // can be null
+    
+    ifentry_t ifentry = extractIfEntryFromVIP(source_vip);
+    // printf("%d\n", e -> distance);
+        
+    if(e == NULL){
+        printf("updating table\n");
+        int entryID = ROUTING_TABLE.num_entries;
+        
+        strcpy(route_entries[entryID].source_vip, source_vip);
+        route_entries[entryID].distance = cost + 1;
+        route_entries[entryID].interface_id = ifentry.interface_id;
+        route_entries[entryID].port = ifentry.port;
+        strcpy(route_entries[entryID].interface_ip, ifentry.interface_ip);
+        strcpy(route_entries[entryID].destination_vip, dest_addr);
+        strcpy(route_entries[entryID].my_vip, ifentry.my_vip);
+        ROUTING_TABLE.num_entries++;
+        // need to set timestamp == now
+    }
+    else if(e -> distance > cost) {
+        printf("need to update table and timestamp\n");
+    }   
+    else{
+        printf("update timestamp\n");
+    }
+}
 
-int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, uint8_t protocol, entry_t * entry_pointer){
+int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, uint8_t TTL, uint8_t protocol, entry_t * entry_pointer){
     char packet[MAX_MSG_LENGTH];
     char * mes;
     struct iphdr * ip;
@@ -185,7 +221,7 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     ifentry_t ifentry;
     uint16_t frag;
     int total_size;
-
+    
     * entry_pointer = extractNextHopFromVIP(dest_addr);
     ifentry = extractIfEntryFromPort(entry_pointer->port);
 
@@ -194,14 +230,12 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
         return -1;
     }
 
-    total_size = ip->ihl * 4 + strlen(payload); // size of header + payload
-
     ip = (struct iphdr*) packet;
 
     ip->check       = 0; // so that checksum will be calculated properly
     ip-> ihl        = (unsigned int) sizeof(struct iphdr) / 4; // 4 bytes to a word, ihl stores number of words in header
     ip->version     = 4;
-    ip->tot_len     = ip->ihl * 4 + strlen(payload);
+    ip->tot_len     = ip->ihl * 4 + payload_size;
     ip->protocol    = protocol;
     ip->ttl         = TTL;
     ip->saddr       = inet_addr(entry_pointer->my_vip);
@@ -211,8 +245,8 @@ int send_packet(char * dest_addr, char * payload, int send_socket, uint8_t TTL, 
     printf("ipsum: %d\n", ip->check);
 
     mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
-    strcpy(mes, payload); // copy the payload from into the packet
-
+    memcpy(mes, payload, payload_size); // copy the payload from into the packet
+    
     send_addr.sin_addr.s_addr = inet_addr(entry_pointer->interface_ip);
     send_addr.sin_family = AF_INET;
     send_addr.sin_port = htons(entry_pointer->port);
@@ -231,7 +265,7 @@ int receive_packet(int rec_socket, int send_socket){
     char dest_addr[20];
     struct iphdr * recv_ip;
     struct sockaddr_in sa;
-    entry_t * nextHop;
+    entry_t nextHop;
     int calculated_check, received_check;
 
     recv(rec_socket, recv_packet, MAX_READIN_BUFFER, 0);
@@ -253,14 +287,25 @@ int receive_packet(int rec_socket, int send_socket){
         inet_ntop(AF_INET, &(recv_ip->daddr), dest_addr, INET_ADDRSTRLEN); // store string representation of the address in dest_addr
 
         if(isMe(dest_addr)<0){ // not in the table, need to forward
-            send_packet(dest_addr, payload, send_socket, (recv_ip->ttl) - 1, recv_ip->protocol, nextHop); // decrement ttl by 1, nextHop currently unused
+            send_packet(dest_addr, payload, strlen(payload), send_socket, (recv_ip->ttl) - 1, recv_ip->protocol, &nextHop); // decrement ttl by 1, nextHop currently unused
         }
         else{
             printf("message: %s\n", payload);
         }
     }
     else if(recv_ip->protocol == RIP_PROTOCOL){
-        // TODO: Leevi, fill this out
+        rip_msg_t * rip_msg = (rip_msg_t*) payload;
+        inet_ntop(AF_INET, &(recv_ip->saddr), dest_addr, INET_ADDRSTRLEN);
+         
+        if(rip_msg -> command == 1) {
+            sendUpdate(dest_addr, send_socket);
+        }
+        else if(rip_msg -> command == 2){
+            int i;
+            for(i = 0; i < rip_msg -> num_entries; i += 1){
+                update_routes(dest_addr, rip_msg -> entries[i].cost, rip_msg -> entries[i].address);
+            }
+        }
     }
     else{ // unknown protocol
         printf("received packet with unknown protocol, value: %d\n", (int)recv_ip->protocol);
@@ -269,19 +314,18 @@ int receive_packet(int rec_socket, int send_socket){
 }
 
 int sendUpdate(char * destination_vip, int send_socket) {
-    rip_msg_t * payload; // sizeof or instantiation sizeof(rip_msg)
+    rip_msg_t * payload = malloc(sizeof(rip_msg_t)); // sizeof or instantiation sizeof(rip_msg)
     
     payload -> command = 2;
+    
     payload -> num_entries = ROUTING_TABLE.num_entries;
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     
-
     int i;
     for(i = 0; i <= ROUTING_TABLE.num_entries; i +=1){
         entry_t e = route_entries[i];
         
         payload -> entries[i].address = inet_addr(e.destination_vip);
-        
         if(strcmp(destination_vip, e.source_vip)==0){
             payload -> entries[i].cost = 16;
         }
@@ -289,9 +333,9 @@ int sendUpdate(char * destination_vip, int send_socket) {
             payload -> entries[i].cost = e.distance;
         }
     }
-    
-    entry_t * nextHop;
-    return send_packet(destination_vip, (char *) payload, send_socket, MAX_DISTANCE, RIP_PROTOCOL, nextHop);
+    entry_t nextHop;
+   
+    return send_packet(destination_vip, (char*) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
@@ -356,12 +400,12 @@ int request_routes(int send_socket){
         ifentry_t e = ifconfig_entries[i];
     
         rip_msg_t * payload; // sizeof or instantiation sizeof(rip_msg)
-        
         payload -> command = 1;
         payload -> num_entries = 0;
         
-        entry_t * nextHop;
-        return send_packet(e.interface_vip, (char *) payload, send_socket, MAX_DISTANCE, RIP_PROTOCOL, nextHop);
+        entry_t nextHop;
+        
+        return send_packet(e.interface_vip, (char *) payload, sizeof(payload), send_socket, MAX_DISTANCE, RIP_PROTOCOL, &nextHop);
     }
 }
 
@@ -387,6 +431,7 @@ int populate_entry_table(FILE * ifp){
         printf("nextIP: %s, nextPort: %d\n  myVIP: %s, remoteVIP: %s\n", nextIP, (int) nextPort, myVIP, remoteVIP);
 
         // initialize the routing table
+        strcpy(route_entries[id-1].source_vip, LOCALHOST_IP); // generated from self
         route_entries[id-1].distance = 1;
         route_entries[id-1].interface_id = id;
         route_entries[id-1].port = nextPort;
@@ -412,13 +457,12 @@ int handle_commands(char * cmd, int send_socket){
     entry_t extracted_entry;
     ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
 
-
     if(strcmp("ifconfig", cmd)==0){
         print_ifconfig();
     }
     else if(strcmp("send", cmd)==0){
         scanf("%s %[^\n]s", sendAddress, message);
-        send_packet(sendAddress, message, send_socket, MAX_DISTANCE, TEST_PROTOCOL, &extracted_entry);
+        send_packet(sendAddress, message, strlen(message), send_socket, MAX_DISTANCE, TEST_PROTOCOL, &extracted_entry);
         printf("sent to: %s, port %d, message: %s\n", extracted_entry.destination_vip, extracted_entry.port, message);
     }
     else if(strcmp("mtu", cmd)==0){ // extra credit
@@ -528,7 +572,7 @@ int main(int argc, char ** argv)
         exit(EXIT_FAILURE);
     }
     
-    // request_routes(send_socket);
+    request_routes(send_socket);
     char cmd[40];
 
     while(1){
