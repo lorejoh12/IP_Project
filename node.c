@@ -101,9 +101,9 @@ route_entry_t * get_route_entry(char * destination_vip){
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
         route_entry_t e = route_entries[0];
-        if(e.distance < INFINITY){
+        //if(e.distance < INFINITY){
             if(strcmp(destination_vip, e.destination_vip)==0) return (route_entry_t *) route_entries;
-        }
+        //}
         route_entries++;
     }
     return NULL;
@@ -571,10 +571,13 @@ int initialize_recieve_socket(int myPort, fd_set * active_fd_set){
 
 trigger_update(int send_socket){
     if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
         if_entry_t e = ifconfig_entries[i];
-        send_update(e.interface_vip, send_socket);
+        route_entry_t * route_entry = get_route_entry(e.interface_vip);
+        if(route_entry -> distance != INFINITY)
+            send_update(e.interface_vip, send_socket);
     }
 }
 
