@@ -61,6 +61,7 @@ typedef struct ifconfig_table
 
 routing_table_t ROUTING_TABLE;
 ifconfig_table_t IFCONFIG_TABLE;
+int NODE_DF = 0;
 
 typedef struct rip_msg
 {
@@ -101,9 +102,8 @@ route_entry_t * get_route_entry(char * destination_vip){
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
         route_entry_t e = route_entries[0];
-        //if(e.distance < INFINITY){
-            if(strcmp(destination_vip, e.destination_vip)==0) return (route_entry_t *) route_entries;
-        //}
+        if(strcmp(destination_vip, e.destination_vip)==0) return (route_entry_t *) route_entries;
+        
         route_entries++;
     }
     return NULL;
@@ -187,12 +187,9 @@ update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t addre
         e -> interface_id = ifentry -> interface_id;
         e -> distance = cost + 1;
         e -> last_updated = time(NULL);
-        printf("Updating table entry and timestamp for %s\n", dest_addr);
-        
     }   
     else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == (cost + 1))){
         e -> last_updated = time(NULL);
-        printf("Just updating timestamp for %s \n", dest_addr);
     }
 }
 
@@ -212,7 +209,9 @@ send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packe
     }
 }
 
-int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, uint8_t TTL, uint8_t protocol, int header_size,  route_entry_t * entry_pointer){
+int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, int node_DF, 
+                uint8_t TTL, uint8_t protocol, int header_size){
+
     char packet[MAX_MSG_LENGTH];
     char * mes;
     struct iphdr * ip;
@@ -220,11 +219,18 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     if_entry_t * ifentry;
     uint16_t frag;
     int total_size;
+    route_entry_t * entry_pointer;
     
-    * entry_pointer = * get_route_entry(dest_addr);
+    entry_pointer = get_route_entry(dest_addr);
+    
+    if(entry_pointer == NULL | entry_pointer->distance == INFINITY){
+        printf("failed to send: destination address unknown: addr %s\n", dest_addr);
+        return -1;
+    }
+
     ifentry = extractIfEntryFromVIP(entry_pointer->destination_vip);
 
-    if(ifentry -> interface_id <0){
+    if(ifentry == NULL){
         printf("failed to send: intended recipient not in table\n");
         return -1;
     }
@@ -244,16 +250,20 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     total_size = header_size * 4 + payload_size;
     int payload_size_fragmented = (ifentry -> mtu_size - header_size*4);
 
+    uint16_t DF_fragment = node_DF ? IP_DF : 0;
     int fragment_i = 0;
+
     while(ifentry -> mtu_size > 0 && total_size > ifentry -> mtu_size){ // need to fragment
         ip->check       = 0;
         ip->tot_len     = ip->ihl * 4 + payload_size_fragmented;
 
-        // if DF is set and it tries to fragment, fail
-
-        uint16_t fragment;
-        fragment = fragment | IP_MF;
-        ip->frag_off = fragment_i * payload_size_fragmented + fragment;
+        if(node_DF){
+            printf("fragmentation failed, DF = 1\n");
+            return -1;
+        }
+        uint16_t MF_fragment;
+        MF_fragment = IP_MF;
+        ip->frag_off = fragment_i * payload_size_fragmented + MF_fragment;
         ip->check = ip_sum((char * )ip, ip->ihl * 4);
 
         send_packet_raw(send_socket, payload, ip, packet, send_addr, payload_size_fragmented, ifentry);
@@ -265,7 +275,7 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
 
     ip->tot_len         = ip->ihl * 4 + payload_size - fragment_i*payload_size_fragmented;
     ip->check           = 0;
-    ip->frag_off        = fragment_i * payload_size_fragmented;
+    ip->frag_off        = DF_fragment + fragment_i * payload_size_fragmented;
     ip->check           = ip_sum((char * )ip, ip->ihl * 4);
 
     send_packet_raw(send_socket, payload, ip, packet, send_addr, ip->tot_len, ifentry);
@@ -284,7 +294,6 @@ int receive_packet(int rec_socket, int send_socket){
     char dest_addr[20];
     struct iphdr * recv_ip;
     struct sockaddr_in sa;
-    route_entry_t nextHop;
     int calculated_check, received_check;
 
     memset(&recv_packet[0], 0, sizeof(recv_packet)); // clear the recv buffer for new incoming messages
@@ -324,7 +333,8 @@ int receive_packet(int rec_socket, int send_socket){
         inet_ntop(AF_INET, &(recv_ip->daddr), dest_addr, INET_ADDRSTRLEN); // store string representation of the address in dest_addr
 
         if(isMe(dest_addr)<0){ // not in the table, need to forward
-            send_packet(dest_addr, payload, strlen(payload), send_socket, (recv_ip->ttl) - 1, recv_ip->protocol, recv_ip->ihl, &nextHop); // decrement ttl by 1, nextHop currently unused
+            int df_bit = (recv_ip->frag_off & IP_DF) == IP_DF;
+            send_packet(dest_addr, payload, strlen(payload), send_socket, df_bit, (recv_ip->ttl) - 1, recv_ip->protocol, recv_ip->ihl); // decrement ttl by 1
         }
         else{
             printf("message: %s\n", payload);
@@ -350,6 +360,7 @@ int receive_packet(int rec_socket, int send_socket){
 }
 
 int send_update(char * destination_vip, int send_socket) {
+
     rip_msg_t * payload = malloc(sizeof(rip_msg_t)); // sizeof or instantiation sizeof(rip_msg)
     
     payload -> command = 2;
@@ -370,9 +381,7 @@ int send_update(char * destination_vip, int send_socket) {
         }
     }
     
-    route_entry_t nextHop;
-
-    return send_packet(destination_vip, (char *) payload, sizeof(rip_msg_t), send_socket, INFINITY, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
+    return send_packet(destination_vip, (char *) payload, sizeof(rip_msg_t), send_socket, NODE_DF, INFINITY, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE);
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
@@ -429,7 +438,7 @@ int listenOn(uint16_t port) {
     return sock;
 }
 
-int request_routes(int send_socket){  
+int request_routes(int send_socket){    
     if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
@@ -439,9 +448,7 @@ int request_routes(int send_socket){
         payload -> command = 1;
         payload -> num_entries = 0;
         
-         route_entry_t nextHop;
-
-        return send_packet(e.interface_vip, (char *) payload, sizeof(rip_msg_t), send_socket, INFINITY, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
+        return send_packet(e.interface_vip, (char *) payload, sizeof(rip_msg_t), send_socket, NODE_DF, INFINITY, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE);
     }
 }
 
@@ -485,7 +492,6 @@ int populate_entry_table(FILE * ifp){
 
 int handle_commands(char * cmd, int send_socket){
     char sendAddress[40], message[MAX_MSG_LENGTH], c;
-     route_entry_t extracted_entry;
     if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
 
     if(strcmp("ifconfig", cmd)==0){
@@ -493,7 +499,7 @@ int handle_commands(char * cmd, int send_socket){
     }
     else if(strcmp("send", cmd)==0){
         scanf("%s %[^\n]s", sendAddress, message);
-        send_packet(sendAddress, message, strlen(message), send_socket, INFINITY, TEST_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &extracted_entry);
+        send_packet(sendAddress, message, strlen(message), send_socket, NODE_DF, INFINITY, TEST_PROTOCOL, DEFAULT_IP_HEADER_SIZE);
     }
     else if(strcmp("mtu", cmd)==0){ // extra credit
         int link_int, mtu_size;
@@ -519,6 +525,14 @@ int handle_commands(char * cmd, int send_socket){
     }
     else if(strcmp("routes", cmd)==0){
         print_routes();
+    }
+    else if(strcmp("dfset", cmd)==0){
+        NODE_DF = 1;
+        printf("DF bit on all messages set to 1\n");
+    }
+    else if(strcmp("dfoff", cmd)==0){
+        NODE_DF = 0;
+        printf("DF bit on all messages set to 0\n");
     }
     else{
         printf("not a valid command: %s\n", cmd);
@@ -622,9 +636,9 @@ int main(int argc, char ** argv)
     
     request_routes(send_socket);
     char cmd[40];
+    printf("Ready for user input:\n");
 
     while(1){
-        printf("\nwaiting for input from the user or socket...\n");
 
         read_fd_set = active_fd_set;
         
@@ -639,6 +653,7 @@ int main(int argc, char ** argv)
         if (FD_ISSET (0, &read_fd_set)){ // data ready on stdin (0)
             scanf("%s", cmd);
             handle_commands(cmd, send_socket);
+            printf("\nReady for user input:\n");
         }
         else if (FD_ISSET (rec_socket, &read_fd_set)){ // data ready on the read socket
             receive_packet(rec_socket, send_socket);
