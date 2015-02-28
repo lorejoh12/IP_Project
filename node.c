@@ -177,8 +177,8 @@ refresh_routes() {
 update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t address){
     char dest_addr[20];
     inet_ntop(AF_INET, &(address), dest_addr, INET_ADDRSTRLEN);
-    route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     route_entry_t * e = get_route_entry(dest_addr); // can be null
+    route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     if_entry_t * ifentry = extractIfEntryFromVIP(next_vip);
     int entryID = ROUTING_TABLE.num_entries;
@@ -352,7 +352,6 @@ int receive_packet(int rec_socket){
     }
 
     if((recv_ip->frag_off & IP_MF) == IP_MF){ // receiving more fragments, pass into the buffer and do nothing
-        printf("got an IP_MF\n");
         memcpy(fragment_buffer + (recv_ip->frag_off & IP_OFFMASK), recv_payload, MAX_READIN_BUFFER);
         fragmenting = 1;
         return 0;
@@ -399,6 +398,7 @@ int receive_packet(int rec_socket){
 * Sends an RIP update message to a destination
 */
 int send_update(char * destination_vip) {
+    refresh_routes();
     rip_msg_t * payload = malloc(sizeof(rip_msg_t));
     
     payload -> command = 2;
@@ -486,14 +486,11 @@ int populate_entry_table(FILE * ifp){
         id++;
 
         fscanf(ifp, "%s %s %s", nextDescrip, myVIP, remoteVIP);
-        //fprintf(stdout, "next: %s\n", nextDescrip);
         
         nextIP = strtok (nextDescrip,":");
         if(strcmp(nextIP, "localhost")==0) strcpy(nextIP, LOCALHOST_IP);
         nextPort = atoi(strtok (NULL,": "));
 
-        // printf("nextIP: %s, nextPort: %d\n  myVIP: %s, remoteVIP: %s\n", nextIP, (int) nextPort, myVIP, remoteVIP);
-        
         // initialize the ifconfig table
         ifconfig_entries[id-1].interface_id = id;
         ifconfig_entries[id-1].port = nextPort;
@@ -609,8 +606,6 @@ int initialize_recieve_socket(int myPort, fd_set * active_fd_set){
         return -1; 
     }
 
-    printf("Non-blocking UDP receive socket: %d\n", rec_socket);
-
     return rec_socket;
 }
 
@@ -669,12 +664,14 @@ int main(int argc, char ** argv)
     // stores last time an update was triggered by timeout
     time_t last_trigger;
     time(&last_trigger);
-
+    struct timeval timeout;
+    
     while(1){
         read_fd_set = active_fd_set;
         
-        struct timeval timeout = {5, 0};   // 5 second timeout
-        
+        // set timeout to equal the amount of time left until the next 5 second trigger
+        timeout.tv_sec = 5 - ((int) time(NULL) - (int)last_trigger);
+
         if (select (FD_SETSIZE, &read_fd_set, NULL, NULL, &timeout) < 0){ 
             perror ("select error");
             exit (EXIT_FAILURE);
