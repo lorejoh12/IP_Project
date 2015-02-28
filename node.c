@@ -15,7 +15,7 @@
 #define MAX_BACK_LOG (5)
 #define MAX_READIN_BUFFER (64 * 1024)
 
-#define MAX_DISTANCE 16
+#define INFINITY 16
 
 #define LOCALHOST_IP "127.0.0.1"
 
@@ -34,7 +34,7 @@ typedef struct route_entry
     int interface_id; // where to go next
     char destination_vip[20]; // the "virtual" IP address of the ultimate destination
     time_t last_updated; // last time this entry was updated
-} entry_t;
+}  route_entry_t;
 
 typedef struct ifconfig_entry
 {
@@ -45,18 +45,18 @@ typedef struct ifconfig_entry
     char interface_vip[20]; // the given "virtual" IP address of the connection
     char my_vip[20]; // the "virtual" IP address that they have for this node
     char * status; // up or down
-} ifentry_t;
+} if_entry_t;
 
 typedef struct routing_table
 {
     int num_entries;
-    entry_t route_entries[100];
+     route_entry_t route_entries[100];
 } routing_table_t;
 
 typedef struct ifconfig_table
 {
     int num_entries;
-    ifentry_t ifconfig_entries[100];
+    if_entry_t ifconfig_entries[100];
 } ifconfig_table_t;
 
 routing_table_t ROUTING_TABLE;
@@ -78,12 +78,12 @@ IP packet header in ip.h
 */
 
 print_ifconfig(){
-    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     
     int i;
     printf("printing ifconfig:\n");
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){
-        ifentry_t e = ifconfig_entries[i];
+        if_entry_t e = ifconfig_entries[i];
         printf("%d %s %s\n", e.interface_id, e.interface_vip, e.status);
     }
 }
@@ -91,28 +91,28 @@ print_ifconfig(){
 /*
 * Return pointer to relevant table entry
 */
-entry_t * get_route_entry(char * destination_vip){
+  route_entry_t * get_route_entry(char * destination_vip){
     refresh_routes();
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
+     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
-        entry_t e = route_entries[0];
-        
-        if(strcmp(destination_vip, e.destination_vip)==0) return (entry_t *) route_entries;
-        
+         route_entry_t e = route_entries[0];
+        if(e.distance < INFINITY){
+            if(strcmp(destination_vip, e.destination_vip)==0) return (  route_entry_t *) route_entries;
+        }
         route_entries++;
     }
     return NULL;
 }
 
-ifentry_t extractIfEntryFromVIP(char * interface_vip){
-    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+ if_entry_t extractIfEntryFromVIP(char * interface_vip){
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
 
-    ifentry_t NullStruct = { -1, -1, -1, "", "", "", "" };
+    if_entry_t NullStruct = { -1, -1, -1, "", "", "", "" };
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
-        ifentry_t e = ifconfig_entries[i];
+        if_entry_t e = ifconfig_entries[i];
         if(strcmp(e.interface_vip, interface_vip)==0) return e;
     }
     return NullStruct;
@@ -120,30 +120,30 @@ ifentry_t extractIfEntryFromVIP(char * interface_vip){
 
 print_routes(){
     refresh_routes();
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
+     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     printf("Route Entries:\n");
     printf("Destination\tif_ID\tDistance\n");
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
-        entry_t e = route_entries[i];
+         route_entry_t e = route_entries[i];
 
         printf("%s\t%d\t%d\n", e.destination_vip, e.interface_id, e.distance);
     }
 }
 
 int isMe(char * vip){
-    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
-        ifentry_t e = ifconfig_entries[i];
+        if_entry_t e = ifconfig_entries[i];
         if(strcmp(vip, e.my_vip)==0) return 1;
     }
     return -1;
 }
 
 refresh_routes() {
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
+     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
@@ -157,10 +157,10 @@ refresh_routes() {
 update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t address){
     char dest_addr[20];
     inet_ntop(AF_INET, &(address), dest_addr, INET_ADDRSTRLEN);
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
-    entry_t * e = get_route_entry(dest_addr); // can be null
+     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
+     route_entry_t * e = get_route_entry(dest_addr); // can be null
     
-    ifentry_t ifentry = extractIfEntryFromVIP(next_vip);
+    if_entry_t ifentry = extractIfEntryFromVIP(next_vip);
     int entryID = ROUTING_TABLE.num_entries;
         
     if(e == NULL){
@@ -187,7 +187,7 @@ update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t addre
     }
 }
 
-send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packet, struct sockaddr_in send_addr, int size, ifentry_t entry){
+send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packet, struct sockaddr_in send_addr, int size, if_entry_t entry){
     char * mes;
 
     mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
@@ -203,12 +203,12 @@ send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packe
     }
 }
 
-int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, uint8_t TTL, uint8_t protocol, int header_size, entry_t * entry_pointer){
+int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, uint8_t TTL, uint8_t protocol, int header_size,  route_entry_t * entry_pointer){
     char packet[MAX_MSG_LENGTH];
     char * mes;
     struct iphdr * ip;
     struct sockaddr_in send_addr;
-    ifentry_t ifentry;
+    if_entry_t ifentry;
     uint16_t frag;
     int total_size;
     
@@ -275,7 +275,7 @@ int receive_packet(int rec_socket, int send_socket){
     char dest_addr[20];
     struct iphdr * recv_ip;
     struct sockaddr_in sa;
-    entry_t nextHop;
+     route_entry_t nextHop;
     int calculated_check, received_check;
 
     memset(&recv_packet[0], 0, sizeof(recv_packet)); // clear the recv buffer for new incoming messages
@@ -346,24 +346,24 @@ int sendUpdate(char * destination_vip, int send_socket) {
     payload -> command = 2;
     
     payload -> num_entries = ROUTING_TABLE.num_entries;
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
+     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
-        entry_t e = route_entries[i];
+         route_entry_t e = route_entries[i];
         
         payload -> entries[i].address = inet_addr(e.destination_vip);
         if(strcmp(destination_vip, e.source_vip)==0){
-            payload -> entries[i].cost = 16;
+            payload -> entries[i].cost = INFINITY - 1;
         }
         else {
             payload -> entries[i].cost = e.distance;
         }
     }
     
-    entry_t nextHop;
+     route_entry_t nextHop;
 
-    return send_packet(destination_vip, (char *) payload, sizeof(rip_msg_t), send_socket, MAX_DISTANCE, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
+    return send_packet(destination_vip, (char *) payload, sizeof(rip_msg_t), send_socket, INFINITY, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
 }
 
 int setUpPort(uint16_t port, struct sockaddr_in server_addr)
@@ -422,18 +422,18 @@ int listenOn(uint16_t port) {
 
 int request_routes(int send_socket){
     
-    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
-        ifentry_t e = ifconfig_entries[i];
+        if_entry_t e = ifconfig_entries[i];
     
         rip_msg_t * payload = malloc(sizeof(rip_msg_t)); // sizeof or instantiation sizeof(rip_msg)
         payload -> command = 1;
         payload -> num_entries = 0;
         
-        entry_t nextHop;
+         route_entry_t nextHop;
 
-        return send_packet(e.interface_vip, (char *) payload, sizeof(rip_msg_t), send_socket, MAX_DISTANCE, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
+        return send_packet(e.interface_vip, (char *) payload, sizeof(rip_msg_t), send_socket, INFINITY, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
     }
 }
 
@@ -442,8 +442,8 @@ int populate_entry_table(FILE * ifp){
     char nextDescrip[80], myVIP[80], remoteVIP[80];
     char * nextIP;
     uint16_t nextPort;
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
-    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     
     id = 0; // because oddly the assignment specifies the first element as id 1, not id 0
     while(!feof(ifp)){
@@ -477,15 +477,15 @@ int populate_entry_table(FILE * ifp){
 
 int handle_commands(char * cmd, int send_socket){
     char sendAddress[40], message[MAX_MSG_LENGTH], c;
-    entry_t extracted_entry;
-    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+     route_entry_t extracted_entry;
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
 
     if(strcmp("ifconfig", cmd)==0){
         print_ifconfig();
     }
     else if(strcmp("send", cmd)==0){
         scanf("%s %[^\n]s", sendAddress, message);
-        send_packet(sendAddress, message, strlen(message), send_socket, MAX_DISTANCE, TEST_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &extracted_entry);
+        send_packet(sendAddress, message, strlen(message), send_socket, INFINITY, TEST_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &extracted_entry);
     }
     else if(strcmp("mtu", cmd)==0){ // extra credit
         int link_int, mtu_size;
