@@ -190,6 +190,9 @@ update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t addre
     }   
     else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == (cost + 1))){
         e -> last_updated = time(NULL);
+    }   
+    else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == (cost + 1))){
+        e -> last_updated = time(NULL);
     }
 }
 
@@ -212,6 +215,7 @@ send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packe
 int send_packet(char * dest_addr, char * payload, int payload_size, int send_socket, int node_DF, 
                 uint8_t TTL, uint8_t protocol, int header_size){
 
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     char packet[MAX_MSG_LENGTH];
     char * mes;
     struct iphdr * ip;
@@ -223,15 +227,16 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     
     entry_pointer = get_route_entry(dest_addr);
     
-    if(entry_pointer == NULL | entry_pointer->distance == INFINITY){
+    if(entry_pointer == NULL){
         printf("failed to send: destination address unknown: addr %s\n", dest_addr);
         return -1;
     }
 
-    ifentry = extractIfEntryFromVIP(entry_pointer->destination_vip);
+    //ifentry = extractIfEntryFromVIP(entry_pointer->destination_vip);
+    ifentry = &ifconfig_entries[entry_pointer->interface_id];
 
     if(ifentry == NULL){
-        printf("failed to send: intended recipient not in table\n");
+        printf("failed to send: intended recipient not in table: addr\n", entry_pointer->destination_vip);
         return -1;
     }
 
@@ -639,7 +644,6 @@ int main(int argc, char ** argv)
     printf("Ready for user input:\n");
 
     while(1){
-
         read_fd_set = active_fd_set;
         
         struct timeval timeout = {5, 0};   // 5 second timeout
