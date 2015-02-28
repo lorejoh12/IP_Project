@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <sys/time.h>
 
 #include "ipsum.h"
 
@@ -29,10 +30,10 @@
 typedef struct route_entry
 {
     char source_vip[20]; // where we learned the route from
-    int distance;
-    int interface_id;
-    char destination_vip[20]; // the given "virtual" IP address of the connection
-   //lastupdated timestamp // not sure if necessary since we'll be doing simultaneous updates?
+    int distance; // distance to destination
+    int interface_id; // where to go next
+    char destination_vip[20]; // the "virtual" IP address of the ultimate destination
+    time_t last_updated; // last time this entry was updated
 } entry_t;
 
 typedef struct ifconfig_entry
@@ -87,25 +88,11 @@ print_ifconfig(){
     }
 }
 
-// gets the table entry in the router from the VIP provided
-entry_t extractNextHopFromVIP(char * destination_vip){
-    entry_t NullStruct = { "", -1, -1, "" };
-    
-    entry_t * route_entries = ROUTING_TABLE.route_entries;
-    
-    if(destination_vip == NULL) return NullStruct;
-    int i;
-    for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
-        entry_t e = route_entries[i];
-        if(strcmp(destination_vip, e.destination_vip)==0) return e;
-    }
-    return NullStruct;
-}
 /*
 * Return pointer to relevant table entry
 */
 entry_t * get_route_entry(char * destination_vip){
-    
+    refresh_routes();
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
@@ -117,19 +104,6 @@ entry_t * get_route_entry(char * destination_vip){
         route_entries++;
     }
     return NULL;
-}
-
-/* Deprecated */
-ifentry_t extractIfEntryFromPort(int port){
-    ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
-
-    ifentry_t NullStruct = { -1, -1, -1, "", "", "", "" };
-    int i;
-    for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
-        ifentry_t e = ifconfig_entries[i];
-        if(e.port == port) return e;
-    }
-    return NullStruct;
 }
 
 ifentry_t extractIfEntryFromVIP(char * interface_vip){
@@ -145,6 +119,7 @@ ifentry_t extractIfEntryFromVIP(char * interface_vip){
 }
 
 print_routes(){
+    refresh_routes();
     entry_t * route_entries = ROUTING_TABLE.route_entries;
     printf("Route Entries:\n");
     printf("Destination\tif_ID\tDistance\n");
@@ -157,7 +132,6 @@ print_routes(){
 }
 
 int isMe(char * vip){
-    if(vip == NULL) return -1;
     ifentry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     
     int i;
@@ -168,15 +142,18 @@ int isMe(char * vip){
     return -1;
 }
 
-/* refreshTable()
-checks if entries are expired (older than 12 seconds)
-
-
-/* referenceTable()
-        call refreshtable
-        return appropriate entry/value/port
-*/
+refresh_routes() {
+    entry_t * route_entries = ROUTING_TABLE.route_entries;
     
+    int i;
+    for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
+        if ((int) time(NULL) - (int) route_entries -> last_updated > 12 & route_entries -> distance > 0) {
+            route_entries -> distance = 16; // entry expired
+        }    
+        route_entries++;
+    }
+}
+
 update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t address){
     char dest_addr[20];
     inet_ntop(AF_INET, &(address), dest_addr, INET_ADDRSTRLEN);
@@ -187,21 +164,26 @@ update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t addre
     int entryID = ROUTING_TABLE.num_entries;
         
     if(e == NULL){
-        printf("Adding entry to table, need to update timestamp\n");
+        printf("Adding entry to table for %s\n", dest_addr);
     
         strcpy(route_entries[entryID].source_vip, source_vip);
         route_entries[entryID].interface_id = ifentry.interface_id;
         route_entries[entryID].distance = cost + 1;
         strcpy(route_entries[entryID].destination_vip, dest_addr);
+        route_entries[entryID].last_updated = time(NULL); 
         ROUTING_TABLE.num_entries++;
-        
-        // need to set timestamp == now
     }
-    else if(e -> distance > cost) {
-        printf("Need to update table entry and timestamp\n");
+    else if(e -> distance > (cost + 1)) {
+        strcpy(e -> source_vip, source_vip);
+        e -> interface_id = ifentry.interface_id;
+        e -> distance = cost + 1;
+        e -> last_updated = time(NULL);
+        printf("Updating table entry and timestamp for %s\n", dest_addr);
+        
     }   
-    else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == cost)){
-        printf("Just updating timestamp\n");
+    else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == (cost + 1))){
+        e -> last_updated = time(NULL);
+        printf("Just updating timestamp for %s \n", dest_addr);
     }
 }
 
@@ -230,7 +212,7 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     uint16_t frag;
     int total_size;
     
-    * entry_pointer = extractNextHopFromVIP(dest_addr);
+    * entry_pointer = * get_route_entry(dest_addr);
     ifentry = extractIfEntryFromVIP(entry_pointer->destination_vip);
 
     if(ifentry.interface_id <0){
