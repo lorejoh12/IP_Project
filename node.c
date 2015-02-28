@@ -511,16 +511,16 @@ int handle_commands(char * cmd, int send_socket){
         int id;
         scanf("%d", &id);
         ifconfig_entries[id-1].status = "down";
-        // set value to 16
+        route_entry_t * route_entry = get_route_entry(ifconfig_entries[id-1].my_vip);
+        route_entry -> distance = 16;
         trigger_update();
     }
     else if(strcmp("up", cmd)==0){
         int id;
         scanf("%d", &id);
         ifconfig_entries[id-1].status = "up";
-        // set value to 0
-        // route_entry_t * get_route_entry(char * destination_vip){
-
+        route_entry_t * route_entry = get_route_entry(ifconfig_entries[id-1].my_vip);
+        route_entry -> distance = 0;
         trigger_update();
     }
     else if(strcmp("routes", cmd)==0){
@@ -589,8 +589,8 @@ trigger_update(int send_socket){
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
         if_entry_t e = ifconfig_entries[i];
-        route_entry_t * route_entry = get_route_entry(e.interface_vip);
-        if(route_entry -> distance != INFINITY)
+        
+        if(strcmp(e.status, "up") == 0)
             send_update(e.interface_vip, send_socket);
     }
 }
