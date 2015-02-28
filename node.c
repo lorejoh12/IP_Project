@@ -34,7 +34,7 @@ typedef struct route_entry
     int interface_id; // where to go next
     char destination_vip[20]; // the "virtual" IP address of the ultimate destination
     time_t last_updated; // last time this entry was updated
-}  route_entry_t;
+} route_entry_t;
 
 typedef struct ifconfig_entry
 {
@@ -77,6 +77,9 @@ typedef struct rip_msg
 IP packet header in ip.h
 */
 
+/*
+* Prints ifconfig method
+*/
 print_ifconfig(){
     if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     
@@ -89,7 +92,7 @@ print_ifconfig(){
 }
 
 /*
-* Return pointer to relevant table entry
+* Return pointer to relevant route entry
 */
 route_entry_t * get_route_entry(char * destination_vip){
     refresh_routes();
@@ -106,6 +109,9 @@ route_entry_t * get_route_entry(char * destination_vip){
     return NULL;
 }
 
+/*
+* Return pointer to relevant if entry
+*/
 if_entry_t * extractIfEntryFromVIP(char * interface_vip){
     if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
 
@@ -150,12 +156,6 @@ refresh_routes() {
     for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
         if ((int) time(NULL) - (int) route_entries -> last_updated > 12 & route_entries -> distance > 0) {
             route_entries -> distance = 16; // entry expired
-            
-            // if in my interface table, mark it as "down"
-            if_entry_t * ifEntry = extractIfEntryFromVIP(route_entries -> destination_vip);
-            if(ifEntry != NULL) {
-                ifEntry -> status = "down";
-            }
         }    
         route_entries++;
     }
@@ -284,7 +284,7 @@ int receive_packet(int rec_socket, int send_socket){
     char dest_addr[20];
     struct iphdr * recv_ip;
     struct sockaddr_in sa;
-     route_entry_t nextHop;
+    route_entry_t nextHop;
     int calculated_check, received_check;
 
     memset(&recv_packet[0], 0, sizeof(recv_packet)); // clear the recv buffer for new incoming messages
@@ -355,11 +355,11 @@ int send_update(char * destination_vip, int send_socket) {
     payload -> command = 2;
     
     payload -> num_entries = ROUTING_TABLE.num_entries;
-     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
+    route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
-         route_entry_t e = route_entries[i];
+        route_entry_t e = route_entries[i];
         
         payload -> entries[i].address = inet_addr(e.destination_vip);
         if(strcmp(destination_vip, e.source_vip)==0){
@@ -370,7 +370,7 @@ int send_update(char * destination_vip, int send_socket) {
         }
     }
     
-     route_entry_t nextHop;
+    route_entry_t nextHop;
 
     return send_packet(destination_vip, (char *) payload, sizeof(rip_msg_t), send_socket, INFINITY, RIP_PROTOCOL, DEFAULT_IP_HEADER_SIZE, &nextHop);
 }
@@ -429,8 +429,7 @@ int listenOn(uint16_t port) {
     return sock;
 }
 
-int request_routes(int send_socket){
-    
+int request_routes(int send_socket){  
     if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
     int i;
     for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
@@ -506,11 +505,17 @@ int handle_commands(char * cmd, int send_socket){
         int id;
         scanf("%d", &id);
         ifconfig_entries[id-1].status = "down";
+        // set value to 16
+        trigger_update();
     }
     else if(strcmp("up", cmd)==0){
         int id;
         scanf("%d", &id);
         ifconfig_entries[id-1].status = "up";
+        // set value to 0
+        // route_entry_t * get_route_entry(char * destination_vip){
+
+        trigger_update();
     }
     else if(strcmp("routes", cmd)==0){
         print_routes();
@@ -564,6 +569,15 @@ int initialize_recieve_socket(int myPort, fd_set * active_fd_set){
     return rec_socket;
 }
 
+trigger_update(int send_socket){
+    if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
+    int i;
+    for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){  
+        if_entry_t e = ifconfig_entries[i];
+        send_update(e.interface_vip, send_socket);
+    }
+}
+
 int main(int argc, char ** argv)
 {
         /* argv[1] is file name
@@ -610,7 +624,10 @@ int main(int argc, char ** argv)
         printf("\nwaiting for input from the user or socket...\n");
 
         read_fd_set = active_fd_set;
-        if (select (FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0){ // 3rd NULL, no timeout in this example
+        
+        struct timeval timeout = {5, 0};   // 5 second timeout
+        
+        if (select (FD_SETSIZE, &read_fd_set, NULL, NULL, &timeout) < 0){ 
             perror ("select error");
             exit (EXIT_FAILURE);
         }
@@ -623,9 +640,8 @@ int main(int argc, char ** argv)
         else if (FD_ISSET (rec_socket, &read_fd_set)){ // data ready on the read socket
             receive_packet(rec_socket, send_socket);
         }
-        else { // timeout
-            // send_update(all connected)
+        else {
+            trigger_update(send_socket);
         }
-        
     }
 }
