@@ -191,20 +191,17 @@ update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t addre
     else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == (cost + 1))){
         e -> last_updated = time(NULL);
     }   
-    else if(strcmp(e -> destination_vip, dest_addr) == 0 & (e -> distance == (cost + 1))){
-        e -> last_updated = time(NULL);
-    }
 }
 
-send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packet, struct sockaddr_in send_addr, int size, if_entry_t * entry){
+send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packet, struct sockaddr_in send_addr, int size, if_entry_t entry){
     char * mes;
 
     mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
     memcpy(mes, payload, size); // copy the rest of the payload into the packet
 
-    send_addr.sin_addr.s_addr = inet_addr(entry -> interface_ip);
+    send_addr.sin_addr.s_addr = inet_addr(entry.interface_ip);
     send_addr.sin_family = AF_INET;
-    send_addr.sin_port = htons(entry -> port);
+    send_addr.sin_port = htons(entry.port);
 
     if (sendto(send_socket, packet, ip->tot_len, 0, (struct sockaddr*) &send_addr, sizeof(send_addr))==-1) {
         perror("failed to send message");
@@ -220,7 +217,7 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     char * mes;
     struct iphdr * ip;
     struct sockaddr_in send_addr;
-    if_entry_t * ifentry;
+    if_entry_t ifentry;
     uint16_t frag;
     int total_size;
     route_entry_t * entry_pointer;
@@ -233,9 +230,9 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     }
 
     //ifentry = extractIfEntryFromVIP(entry_pointer->destination_vip);
-    ifentry = &ifconfig_entries[entry_pointer->interface_id];
+    ifentry = ifconfig_entries[entry_pointer->interface_id - 1];
 
-    if(ifentry == NULL){
+    if(entry_pointer->interface_id <=0){
         printf("failed to send: intended recipient not in table: addr\n", entry_pointer->destination_vip);
         return -1;
     }
@@ -249,16 +246,16 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     ip->version     = 4;
     ip->protocol    = protocol;
     ip->ttl         = TTL;
-    ip->saddr       = inet_addr(ifentry -> my_vip);
+    ip->saddr       = inet_addr(ifentry.my_vip);
     ip->daddr       = inet_addr(entry_pointer->destination_vip);
 
     total_size = header_size * 4 + payload_size;
-    int payload_size_fragmented = (ifentry -> mtu_size - header_size*4);
+    int payload_size_fragmented = (ifentry.mtu_size - header_size*4);
 
     uint16_t DF_fragment = node_DF ? IP_DF : 0;
     int fragment_i = 0;
 
-    while(ifentry -> mtu_size > 0 && total_size > ifentry -> mtu_size){ // need to fragment
+    while(ifentry.mtu_size > 0 && total_size > ifentry.mtu_size){ // need to fragment
         ip->check       = 0;
         ip->tot_len     = ip->ihl * 4 + payload_size_fragmented;
 
@@ -643,6 +640,10 @@ int main(int argc, char ** argv)
     char cmd[40];
     printf("Ready for user input:\n");
 
+    // stores last time an update was triggered by timeout
+    time_t last_trigger;
+    time(&last_trigger);
+
     while(1){
         read_fd_set = active_fd_set;
         
@@ -662,8 +663,10 @@ int main(int argc, char ** argv)
         else if (FD_ISSET (rec_socket, &read_fd_set)){ // data ready on the read socket
             receive_packet(rec_socket, send_socket);
         }
-        else {
-            trigger_update(send_socket);
+
+        if((int) time(NULL) - (int) last_trigger >= 5){
+            trigger_update(send_socket);    
+            time(&last_trigger); 
         }
     }
 }
