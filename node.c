@@ -50,7 +50,7 @@ typedef struct ifconfig_entry
 typedef struct routing_table
 {
     int num_entries;
-     route_entry_t route_entries[100];
+    route_entry_t route_entries[100];
 } routing_table_t;
 
 typedef struct ifconfig_table
@@ -91,41 +91,42 @@ print_ifconfig(){
 /*
 * Return pointer to relevant table entry
 */
-  route_entry_t * get_route_entry(char * destination_vip){
+route_entry_t * get_route_entry(char * destination_vip){
     refresh_routes();
-     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
+    route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i +=1){
-         route_entry_t e = route_entries[0];
+        route_entry_t e = route_entries[0];
         if(e.distance < INFINITY){
-            if(strcmp(destination_vip, e.destination_vip)==0) return (  route_entry_t *) route_entries;
+            if(strcmp(destination_vip, e.destination_vip)==0) return (route_entry_t *) route_entries;
         }
         route_entries++;
     }
     return NULL;
 }
 
- if_entry_t extractIfEntryFromVIP(char * interface_vip){
+if_entry_t * extractIfEntryFromVIP(char * interface_vip){
     if_entry_t * ifconfig_entries = IFCONFIG_TABLE.ifconfig_entries;
 
-    if_entry_t NullStruct = { -1, -1, -1, "", "", "", "" };
     int i;
-    for(i = 0; i < IFCONFIG_TABLE.num_entries; i +=1){
-        if_entry_t e = ifconfig_entries[i];
-        if(strcmp(e.interface_vip, interface_vip)==0) return e;
+    for(i = 0; i < IFCONFIG_TABLE.num_entries; i += 1){
+        if_entry_t e = ifconfig_entries[0];
+        if(strcmp(e.interface_vip, interface_vip)==0) return ifconfig_entries;
+        
+        ifconfig_entries++;
     }
-    return NullStruct;
+    return NULL;
 }
 
 print_routes(){
     refresh_routes();
-     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
+    route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     printf("Route Entries:\n");
     printf("Destination\tif_ID\tDistance\n");
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
-         route_entry_t e = route_entries[i];
+        route_entry_t e = route_entries[i];
 
         printf("%s\t%d\t%d\n", e.destination_vip, e.interface_id, e.distance);
     }
@@ -143,12 +144,18 @@ int isMe(char * vip){
 }
 
 refresh_routes() {
-     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
+    route_entry_t * route_entries = ROUTING_TABLE.route_entries;
     
     int i;
     for(i = 0; i < ROUTING_TABLE.num_entries; i += 1){
         if ((int) time(NULL) - (int) route_entries -> last_updated > 12 & route_entries -> distance > 0) {
             route_entries -> distance = 16; // entry expired
+            
+            // if in my interface table, mark it as "down"
+            if_entry_t * ifEntry = extractIfEntryFromVIP(route_entries -> destination_vip);
+            if(ifEntry != NULL) {
+                ifEntry -> status = "down";
+            }
         }    
         route_entries++;
     }
@@ -157,17 +164,19 @@ refresh_routes() {
 update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t address){
     char dest_addr[20];
     inet_ntop(AF_INET, &(address), dest_addr, INET_ADDRSTRLEN);
-     route_entry_t * route_entries = ROUTING_TABLE.route_entries;
-     route_entry_t * e = get_route_entry(dest_addr); // can be null
+    route_entry_t * route_entries = ROUTING_TABLE.route_entries;
+    route_entry_t * e = get_route_entry(dest_addr); // can be null
     
-    if_entry_t ifentry = extractIfEntryFromVIP(next_vip);
+    if_entry_t * ifentry = extractIfEntryFromVIP(next_vip);
     int entryID = ROUTING_TABLE.num_entries;
-        
-    if(e == NULL){
-        printf("Adding entry to table for %s\n", dest_addr);
     
+    if(e == NULL){
+        if(ifentry == NULL)
+            route_entries[entryID].interface_id = -1;
+        else
+            route_entries[entryID].interface_id = ifentry -> interface_id;
+        
         strcpy(route_entries[entryID].source_vip, source_vip);
-        route_entries[entryID].interface_id = ifentry.interface_id;
         route_entries[entryID].distance = cost + 1;
         strcpy(route_entries[entryID].destination_vip, dest_addr);
         route_entries[entryID].last_updated = time(NULL); 
@@ -175,7 +184,7 @@ update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t addre
     }
     else if(e -> distance > (cost + 1)) {
         strcpy(e -> source_vip, source_vip);
-        e -> interface_id = ifentry.interface_id;
+        e -> interface_id = ifentry -> interface_id;
         e -> distance = cost + 1;
         e -> last_updated = time(NULL);
         printf("Updating table entry and timestamp for %s\n", dest_addr);
@@ -187,15 +196,15 @@ update_routes (char * source_vip, char * next_vip, uint32_t cost, uint32_t addre
     }
 }
 
-send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packet, struct sockaddr_in send_addr, int size, if_entry_t entry){
+send_packet_raw(int send_socket, char * payload, struct iphdr * ip, char * packet, struct sockaddr_in send_addr, int size, if_entry_t * entry){
     char * mes;
 
     mes = (char *)(packet + ip->ihl * 4); // use the header length parameter to offset the packet
     memcpy(mes, payload, size); // copy the rest of the payload into the packet
 
-    send_addr.sin_addr.s_addr = inet_addr(entry.interface_ip);
+    send_addr.sin_addr.s_addr = inet_addr(entry -> interface_ip);
     send_addr.sin_family = AF_INET;
-    send_addr.sin_port = htons(entry.port);
+    send_addr.sin_port = htons(entry -> port);
 
     if (sendto(send_socket, packet, ip->tot_len, 0, (struct sockaddr*) &send_addr, sizeof(send_addr))==-1) {
         perror("failed to send message");
@@ -208,14 +217,14 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     char * mes;
     struct iphdr * ip;
     struct sockaddr_in send_addr;
-    if_entry_t ifentry;
+    if_entry_t * ifentry;
     uint16_t frag;
     int total_size;
     
     * entry_pointer = * get_route_entry(dest_addr);
     ifentry = extractIfEntryFromVIP(entry_pointer->destination_vip);
 
-    if(ifentry.interface_id <0){
+    if(ifentry -> interface_id <0){
         printf("failed to send: intended recipient not in table\n");
         return -1;
     }
@@ -229,14 +238,14 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int send_soc
     ip->version     = 4;
     ip->protocol    = protocol;
     ip->ttl         = TTL;
-    ip->saddr       = inet_addr(ifentry.my_vip);
+    ip->saddr       = inet_addr(ifentry -> my_vip);
     ip->daddr       = inet_addr(entry_pointer->destination_vip);
 
     total_size = header_size * 4 + payload_size;
-    int payload_size_fragmented = (ifentry.mtu_size - header_size*4);
+    int payload_size_fragmented = (ifentry -> mtu_size - header_size*4);
 
     int fragment_i = 0;
-    while(ifentry.mtu_size > 0 && total_size > ifentry.mtu_size){ // need to fragment
+    while(ifentry -> mtu_size > 0 && total_size > ifentry -> mtu_size){ // need to fragment
         ip->check       = 0;
         ip->tot_len     = ip->ihl * 4 + payload_size_fragmented;
 
@@ -325,7 +334,7 @@ int receive_packet(int rec_socket, int send_socket){
         rip_msg_t * rip_msg = (rip_msg_t*) payload;
         inet_ntop(AF_INET, &(recv_ip->saddr), dest_addr, INET_ADDRSTRLEN);
         if(rip_msg -> command == 1) {
-            sendUpdate(dest_addr, send_socket);
+            send_update(dest_addr, send_socket);
         }
         else if(rip_msg -> command == 2){
             int i;
@@ -340,7 +349,7 @@ int receive_packet(int rec_socket, int send_socket){
     return 0;
 }
 
-int sendUpdate(char * destination_vip, int send_socket) {
+int send_update(char * destination_vip, int send_socket) {
     rip_msg_t * payload = malloc(sizeof(rip_msg_t)); // sizeof or instantiation sizeof(rip_msg)
     
     payload -> command = 2;
@@ -611,8 +620,12 @@ int main(int argc, char ** argv)
             scanf("%s", cmd);
             handle_commands(cmd, send_socket);
         }
-        if (FD_ISSET (rec_socket, &read_fd_set)){ // data ready on the read socket
+        else if (FD_ISSET (rec_socket, &read_fd_set)){ // data ready on the read socket
             receive_packet(rec_socket, send_socket);
         }
+        else { // timeout
+            // send_update(all connected)
+        }
+        
     }
 }
