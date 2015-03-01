@@ -17,7 +17,15 @@ When select times out or a fd that select is listening to has data, then the las
 
 Forwarding implementation
 -------------------------
+The forwarding algorithm is centered in the send_packet and receive_packet methods. 
 
+The send packet method is passed the appropriate information for constructing an IP header, as well as the payload to be included. The information for the header includes the send address, the TTL, the protocol, and the desired header size. The send method then checks the routing tables to see if the destination address is known; if it is unknown, the messages is not sent/ packet is dropped.
+
+If the destination address is known, the method finds its next-hop port from the table. It creates an IP header for it, and calculates a checksum. From there, the built in send_to method is called to utilize the UDP protocol and send the packet to the intended port.
+
+The receive_packet method first receives an incoming packet from the read socket. The packet is first checked for the checksum, and then a new checksum is calculated and the two compared. If they don't match, then there was an error and the packet is dropped. If they do, then the packet is checked for its protocol. 
+
+A protocol of 0 (TEST_PROTOCOL) means that the packet is a test message, and so the destination is checked in the routing table. If the destination is the receiving node, then the payload is sent to the console. If the destination is another node, the TTL is decremented and the packet sent to the send_packet method to forward to the next hop destination. A protocol of 200 (RIP_PROTOCOL) means that the packet is routing information, and follows the process described above.
 
 Extra credit Implementation: Fragmentation
 ------------------------------------------
