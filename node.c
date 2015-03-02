@@ -252,10 +252,15 @@ int send_packet(char * dest_addr, char * payload, int payload_size, int node_DF,
         return -1;
     }
 
+    if(isMe(dest_addr)==1){
+        printf("message: %s\n", payload);
+        return 0;
+    }
+
     ifentry = ifconfig_entries[entry_pointer->interface_id - 1];
 
     if(entry_pointer->interface_id <=0){
-        printf("failed to send: intended recipient not in table: addr\n", entry_pointer->destination_vip);
+        printf("failed to send: intended recipient not in table: addr %s\n", entry_pointer->destination_vip);
         return -1;
     }
 
@@ -518,30 +523,45 @@ int handle_commands(char * cmd){
         print_ifconfig();
     }
     else if(strcmp("send", cmd)==0){
-        scanf("%s %[^\n]s", sendAddress, message);
+        scanf("%20s %1400[^\n]s", sendAddress, message);
         send_packet(sendAddress, message, strlen(message), NODE_DF, INFINITY, TEST_PROTOCOL, DEFAULT_IP_HEADER_SIZE);
     }
     else if(strcmp("mtu", cmd)==0){ // extra credit
         int link_int, mtu_size;
         scanf("%d %d", &link_int, &mtu_size);
+
+        if(link_int >= IFCONFIG_TABLE.num_entries | link_int <= 0) {
+            printf("Interface ID not in table.\n");
+            return -1;
+        }
         ifconfig_entries[link_int-1].mtu_size = mtu_size;
         printf("mtu for link %d set to %d\n", link_int, mtu_size);
     }
     else if(strcmp("down", cmd)==0){
         int id;
         scanf("%d", &id);
+        if(id >= IFCONFIG_TABLE.num_entries | id <= 0) {
+            printf("Interface ID not in table.\n");
+            return -1;
+        }
         printf("setting ifconfig table entry %d to down\n", id);
         ifconfig_entries[id-1].status = "down";
         route_entry_t * route_entry = get_route_entry(ifconfig_entries[id-1].my_vip);
         route_entry -> distance = 16;
+        printf("Interface %d is down\n", id);
         trigger_update();
     }
     else if(strcmp("up", cmd)==0){
         int id;
         scanf("%d", &id);
+        if(id >= IFCONFIG_TABLE.num_entries | id <= 0) {
+            printf("Interface ID not in table.\n");
+            return -1;
+        }
         ifconfig_entries[id-1].status = "up";
         route_entry_t * route_entry = get_route_entry(ifconfig_entries[id-1].my_vip);
         route_entry -> distance = 0;
+        printf("Interface %d is up\n", id);
         trigger_update();
     }
     else if(strcmp("routes", cmd)==0){
